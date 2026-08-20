@@ -1,0 +1,13 @@
+test_id,request_name,feature,description,expected_status,expect_array,expect_empty,expect_count,expect_field,expect_field_type,search,id,categoryName
+TC-FR05-01,FR05 — Lấy Danh Mục & Tìm Kiếm Sản Phẩm,FR05,Lấy danh sách sản phẩm (không tìm kiếm),200,true,false,,,,,,
+TC-FR05-02,FR05 — Lấy Danh Mục & Tìm Kiếm Sản Phẩm,FR05,Tìm kiếm sản phẩm theo từ khóa hợp lệ (CẬP NHẬT keyword thực tế sau khi xem dữ liệu that),200,true,,,,,,,
+TC-FR05-03,FR05 — Lấy Danh Mục & Tìm Kiếm Sản Phẩm,FR05,Tìm kiếm với từ khóa chắc chắn không tồn tại,200,true,true,,,,xyz123notfound,,
+TC-FR05-35,FR05 — Lấy Danh Mục & Tìm Kiếm Sản Phẩm,FR05,Regression: price luôn là number (trước đây từng có bug price-as-string),200,true,false,,,,,,
+TC-FR05-10,FR05 — Xem Chi Tiết Sản Phẩm,FR05,Xem chi tiết sản phẩm hợp lệ,200,,,,,,,1,
+TC-FR05-11,FR05 — Xem Chi Tiết Sản Phẩm,FR05,Xem chi tiết sản phẩm không tồn tại (kỳ vọng 404 — ghi nhận nếu API trả 200 là bug),404,,,,,,,999999,
+TC-FR08-01,FR08 — Checkout,FR08,Checkout hợp lệ (cần chạy Setup trước để có userToken + cart),200,,,,,,,,
+TC-FR08-02,FR08 — Checkout,FR08,Checkout thiếu shipping_address,400,,,,,,,,
+TC-FR14-01,FR14 — Lấy Danh Sách Category,FR14,Lấy danh sách category (cần adminToken),200,true,false,,,,,,
+TC-FR14-02,FR14 — Thêm Category,FR14,Thêm category hợp lệ (lưu testCategoryId),200,,,,,,,,Do dien tu
+TC-FR14-03,FR14 — Cập Nhật Category,FR14,Cập nhật category vừa tạo (dùng testCategoryId),200,,,,,,,,Do gia dung
+TC-FR14-04,FR14 — Xóa Category,FR14,Xóa category vừa tạo (dùng testCategoryId),200,,,,,,,,
