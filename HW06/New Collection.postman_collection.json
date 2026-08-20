@@ -430,6 +430,14 @@
               "const targetRequest = pm.iterationData.get('request_name');\n",
               "if (targetRequest && targetRequest !== pm.info.requestName) {\n",
               "    pm.execution.skipRequest();\n",
+              "}",
+              "\n",
+              "// Hỗ trợ test boundary case cho query string (mảng search[], lặp lại param...) — API Spec 3.1\n",
+              "// Nếu CSV có cột 'raw_query', dùng NGUYÊN VĂN chuỗi đó thay cho '?search={{search}}' mặc định.\n",
+              "// Ví dụ raw_query = 'search[]=abc&search[]=def' hoặc 'search=a&search=b' (lặp lại param).\n",
+              "const rawQuery = pm.iterationData.get('raw_query');\n",
+              "if (rawQuery) {\n",
+              "    pm.request.url = pm.environment.get('baseUrl') + '/api/products?' + rawQuery;\n",
               "}"
             ]
           }
@@ -693,6 +701,470 @@
       "response": []
     },
     {
+      "name": "FR08 — Đăng Nhập",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
+              "// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
+              "// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
+              "const targetRequest = pm.iterationData.get('request_name');\n",
+              "if (targetRequest && targetRequest !== pm.info.requestName) {\n",
+              "    pm.execution.skipRequest();\n",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// =============================================\n",
+              "// FR08 — Đăng Nhập (kiểm thử tiêu cực: sai email/password, tài khoản khóa 403, thiếu field...)\n// Ref: API Spec mục 1.2 — POST /api/login\n// Dùng CSV cột 'email' / 'password' riêng — KHÔNG dùng chung userEmail/userPassword của Setup\n// để không ảnh hưởng tới token đang lưu trong Environment.\n",
+              "// =============================================\n",
+              "\n",
+              "const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
+              "const testId         = pm.iterationData.get('test_id')          || '';\n",
+              "const testDesc       = pm.iterationData.get('description')      || '';\n",
+              "\n",
+              "const label = `[${testId}] ${testDesc}`;\n",
+              "\n",
+              "pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
+              "    pm.response.to.have.status(expectedStatus);\n",
+              "});\n",
+              "\n",
+              "const statusMatches = pm.response.code === expectedStatus;\n",
+              "\n",
+              "if (statusMatches && expectedStatus < 300) {\n",
+              "    pm.test(`${label} — Content-Type là application/json`, () => {\n",
+              "        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');\n",
+              "    });\n",
+              "\n",
+              "    pm.test(`${label} — Response có trả về token`, () => {\n",
+              "        const jsonData = pm.response.json();\n",
+              "        pm.expect(jsonData).to.have.property('token');\n",
+              "    });\n",
+              "",
+              "} else if (statusMatches && expectedStatus >= 400) {\n",
+              "    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
+              "        try {\n",
+              "            const body = pm.response.json();\n",
+              "            pm.expect(body).to.satisfy(b =>\n",
+              "                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
+              "                'Body phải có trường message, error, hoặc detail'\n",
+              "            );\n",
+              "        } catch(e) {\n",
+              "            pm.expect(pm.response.text()).to.not.be.empty;\n",
+              "        }\n",
+              "    });\n",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "login"
+          ]
+        },
+        "description": "Kiểm thử tiêu cực luồng đăng nhập (FR08): sai mật khẩu, email không tồn tại, tài khoản bị khóa, thiếu trường... Ref: API Spec 1.2. CSV điều khiển qua cột 'email'/'password'.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "FR08 — Xem Giỏ Hàng",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
+              "// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
+              "// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
+              "const targetRequest = pm.iterationData.get('request_name');\n",
+              "if (targetRequest && targetRequest !== pm.info.requestName) {\n",
+              "    pm.execution.skipRequest();\n",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// =============================================\n",
+              "// FR08 — Xem Giỏ Hàng\n// Ref: API Spec mục 4.1 — GET /api/cart (yêu cầu Authorization)\n// Header Authorization = {{authHeader}}, điều khiển qua CSV cột 'auth_mode' (ADMIN/USER/INVALID/NONE)\n// để test cả trường hợp không token / token hỏng.\n",
+              "// =============================================\n",
+              "\n",
+              "const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
+              "const testId         = pm.iterationData.get('test_id')          || '';\n",
+              "const testDesc       = pm.iterationData.get('description')      || '';\n",
+              "\n",
+              "const label = `[${testId}] ${testDesc}`;\n",
+              "\n",
+              "pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
+              "    pm.response.to.have.status(expectedStatus);\n",
+              "});\n",
+              "\n",
+              "const statusMatches = pm.response.code === expectedStatus;\n",
+              "\n",
+              "if (statusMatches && expectedStatus < 300) {\n",
+              "    pm.test(`${label} — Content-Type là application/json`, () => {\n",
+              "        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');\n",
+              "    });\n",
+              "\n",
+              "    pm.test(`${label} — Response là mảng (giỏ hàng)`, () => {\n",
+              "        pm.expect(pm.response.json()).to.be.an('array');\n",
+              "    });\n",
+              "",
+              "} else if (statusMatches && expectedStatus >= 400) {\n",
+              "    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
+              "        try {\n",
+              "            const body = pm.response.json();\n",
+              "            pm.expect(body).to.satisfy(b =>\n",
+              "                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
+              "                'Body phải có trường message, error, hoặc detail'\n",
+              "            );\n",
+              "        } catch(e) {\n",
+              "            pm.expect(pm.response.text()).to.not.be.empty;\n",
+              "        }\n",
+              "    });\n",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{authHeader}}",
+            "description": "Điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE — API Spec mục 4"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/cart",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "cart"
+          ]
+        },
+        "description": "Xem giỏ hàng của user hiện tại. Ref: API Spec 4.1. Authorization điều khiển qua CSV 'auth_mode'."
+      },
+      "response": []
+    },
+    {
+      "name": "FR08 — Thêm Giỏ Hàng",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
+              "// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
+              "// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
+              "const targetRequest = pm.iterationData.get('request_name');\n",
+              "if (targetRequest && targetRequest !== pm.info.requestName) {\n",
+              "    pm.execution.skipRequest();\n",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// =============================================\n",
+              "// FR08 — Thêm Giỏ Hàng\n// Ref: API Spec mục 4.2 — POST /api/cart\n// CSV điều khiển product_id/quantity qua cột 'cartProductId'/'cartQuantity', và auth qua 'auth_mode'.\n",
+              "// =============================================\n",
+              "\n",
+              "const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
+              "const testId         = pm.iterationData.get('test_id')          || '';\n",
+              "const testDesc       = pm.iterationData.get('description')      || '';\n",
+              "\n",
+              "const label = `[${testId}] ${testDesc}`;\n",
+              "\n",
+              "pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
+              "    pm.response.to.have.status(expectedStatus);\n",
+              "});\n",
+              "\n",
+              "const statusMatches = pm.response.code === expectedStatus;\n",
+              "\n",
+              "if (statusMatches && expectedStatus < 300) {\n",
+              "    pm.test(`${label} — Content-Type là application/json`, () => {\n",
+              "        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');\n",
+              "    });\n",
+              "",
+              "} else if (statusMatches && expectedStatus >= 400) {\n",
+              "    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
+              "        try {\n",
+              "            const body = pm.response.json();\n",
+              "            pm.expect(body).to.satisfy(b =>\n",
+              "                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
+              "                'Body phải có trường message, error, hoặc detail'\n",
+              "            );\n",
+              "        } catch(e) {\n",
+              "            pm.expect(pm.response.text()).to.not.be.empty;\n",
+              "        }\n",
+              "    });\n",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "{{authHeader}}",
+            "description": "Điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE — API Spec mục 4"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/cart",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "cart"
+          ]
+        },
+        "description": "Thêm sản phẩm vào giỏ hàng. Ref: API Spec 4.2. CSV điều khiển 'cartProductId'/'cartQuantity' và 'auth_mode'.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"product_id\": {{cartProductId}},\n  \"quantity\": {{cartQuantity}}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "FR08 — Xem Danh Sách Đơn Hàng",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
+              "// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
+              "// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
+              "const targetRequest = pm.iterationData.get('request_name');\n",
+              "if (targetRequest && targetRequest !== pm.info.requestName) {\n",
+              "    pm.execution.skipRequest();\n",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// =============================================\n",
+              "// FR08 — Xem Danh Sách Đơn Hàng\n// Ref: API Spec mục 4.4 — GET /api/orders/my-orders\n// Chỉ trả về đơn hàng của CHÍNH user đang đăng nhập (kiểm tra không rò rỉ đơn của user khác).\n",
+              "// =============================================\n",
+              "\n",
+              "const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
+              "const testId         = pm.iterationData.get('test_id')          || '';\n",
+              "const testDesc       = pm.iterationData.get('description')      || '';\n",
+              "\n",
+              "const label = `[${testId}] ${testDesc}`;\n",
+              "\n",
+              "pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
+              "    pm.response.to.have.status(expectedStatus);\n",
+              "});\n",
+              "\n",
+              "const statusMatches = pm.response.code === expectedStatus;\n",
+              "\n",
+              "if (statusMatches && expectedStatus < 300) {\n",
+              "    pm.test(`${label} — Content-Type là application/json`, () => {\n",
+              "        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');\n",
+              "    });\n",
+              "\n",
+              "    pm.test(`${label} — Response là mảng đơn hàng`, () => {\n",
+              "        pm.expect(pm.response.json()).to.be.an('array');\n",
+              "    });\n",
+              "",
+              "} else if (statusMatches && expectedStatus >= 400) {\n",
+              "    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
+              "        try {\n",
+              "            const body = pm.response.json();\n",
+              "            pm.expect(body).to.satisfy(b =>\n",
+              "                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
+              "                'Body phải có trường message, error, hoặc detail'\n",
+              "            );\n",
+              "        } catch(e) {\n",
+              "            pm.expect(pm.response.text()).to.not.be.empty;\n",
+              "        }\n",
+              "    });\n",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{authHeader}}",
+            "description": "Điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE — API Spec mục 4"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/orders/my-orders",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "orders",
+            "my-orders"
+          ]
+        },
+        "description": "Xem danh sách đơn hàng của user hiện tại. Ref: API Spec 4.4. Authorization điều khiển qua CSV 'auth_mode'."
+      },
+      "response": []
+    },
+    {
+      "name": "FR08 — Xem Chi Tiết Đơn Hàng",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
+              "// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
+              "// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
+              "const targetRequest = pm.iterationData.get('request_name');\n",
+              "if (targetRequest && targetRequest !== pm.info.requestName) {\n",
+              "    pm.execution.skipRequest();\n",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// =============================================\n",
+              "// FR08 — Xem Chi Tiết Đơn Hàng (kiểm thử IDOR/BOLA)\n// Ref: API Spec mục 4.5 — GET /api/orders/:id\n// CSV cột 'orderId' truyền id đơn hàng của CHÍNH mình (happy path) hoặc id đơn hàng của user KHÁC\n// (để kiểm tra lỗ hổng IDOR — API phải trả 403/404, KHÔNG được trả dữ liệu đơn hàng của người khác).\n",
+              "// =============================================\n",
+              "\n",
+              "const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
+              "const testId         = pm.iterationData.get('test_id')          || '';\n",
+              "const testDesc       = pm.iterationData.get('description')      || '';\n",
+              "\n",
+              "const label = `[${testId}] ${testDesc}`;\n",
+              "\n",
+              "pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
+              "    pm.response.to.have.status(expectedStatus);\n",
+              "});\n",
+              "\n",
+              "const statusMatches = pm.response.code === expectedStatus;\n",
+              "\n",
+              "if (statusMatches && expectedStatus < 300) {\n",
+              "    pm.test(`${label} — Content-Type là application/json`, () => {\n",
+              "        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');\n",
+              "    });\n",
+              "\n",
+              "    const jsonData = pm.response.json();\n",
+              "    const expectedOwner = pm.iterationData.get('expectedOwnerEmail');\n",
+              "    if (expectedOwner) {\n",
+              "        pm.test(`${label} — IDOR check: đơn hàng thuộc đúng chủ sở hữu mong đợi`, () => {\n",
+              "            pm.expect(JSON.stringify(jsonData)).to.include(expectedOwner);\n",
+              "        });\n",
+              "    }\n",
+              "",
+              "} else if (statusMatches && expectedStatus >= 400) {\n",
+              "    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
+              "        try {\n",
+              "            const body = pm.response.json();\n",
+              "            pm.expect(body).to.satisfy(b =>\n",
+              "                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
+              "                'Body phải có trường message, error, hoặc detail'\n",
+              "            );\n",
+              "        } catch(e) {\n",
+              "            pm.expect(pm.response.text()).to.not.be.empty;\n",
+              "        }\n",
+              "    });\n",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{authHeader}}",
+            "description": "Điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE — API Spec mục 4"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/orders/{{orderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "orders",
+            "{{orderId}}"
+          ]
+        },
+        "description": "Xem chi tiết 1 đơn hàng theo id — dùng để test IDOR/BOLA (truy cập đơn hàng của user khác). Ref: API Spec 4.5. CSV: 'orderId', 'auth_mode', tùy chọn 'expectedOwnerEmail'."
+      },
+      "response": []
+    },
+    {
       "name": "FR08 — Checkout",
       "event": [
         {
@@ -771,8 +1243,8 @@
           },
           {
             "key": "Authorization",
-            "value": "Bearer {{userToken}}",
-            "description": "Yêu cầu đăng nhập — API Spec mục 4"
+            "value": "{{authHeader}}",
+            "description": "Yêu cầu đăng nhập — API Spec mục 4 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
           }
         ],
         "url": {
@@ -904,8 +1376,8 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{adminToken}}",
-                "description": "Yêu cầu tài khoản Admin — API Spec mục 6"
+                "value": "{{authHeader}}",
+                "description": "Yêu cầu tài khoản Admin — API Spec mục 6 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
               }
             ],
             "url": {
@@ -1010,8 +1482,8 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{adminToken}}",
-                "description": "Yêu cầu tài khoản Admin — API Spec mục 6"
+                "value": "{{authHeader}}",
+                "description": "Yêu cầu tài khoản Admin — API Spec mục 6 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
               }
             ],
             "url": {
@@ -1119,8 +1591,8 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{adminToken}}",
-                "description": "Yêu cầu tài khoản Admin — API Spec mục 6"
+                "value": "{{authHeader}}",
+                "description": "Yêu cầu tài khoản Admin — API Spec mục 6 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
               }
             ],
             "url": {
@@ -1215,8 +1687,8 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{adminToken}}",
-                "description": "Yêu cầu tài khoản Admin — API Spec mục 6"
+                "value": "{{authHeader}}",
+                "description": "Yêu cầu tài khoản Admin — API Spec mục 6 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
               }
             ],
             "url": {
@@ -1245,10 +1717,52 @@
         "packages": {},
         "requests": {},
         "exec": [
+          "console.log(\"==========================================\");\r",
+          "console.log(\"MSSV / Student ID:\", pm.environment.get(\"studentID\"));\r",
+          "console.log(\"Request:\", pm.info.requestName);\r",
+          "console.log(\"Iteration:\", pm.info.iteration + 1);\r",
+          "console.log(\"==========================================\");\r",
+          "\r",
           "pm.request.headers.upsert({\r",
           "  key: \"X-Student-Id\",\r",
           "  value: pm.environment.get(\"studentID\")\r",
-          "});"
+          "});\r",
+          "\r",
+          "// =============================================\r",
+          "// Auth Header Resolver (chạy cho MỌI request trong collection)\r",
+          "// Cho phép 1 file CSV điều khiển Authorization header theo cột 'auth_mode':\r",
+          "//   ADMIN   -> Bearer {{adminToken}}\r",
+          "//   USER    -> Bearer {{userToken}}\r",
+          "//   INVALID -> token giả, dùng để test token hỏng/hết hạn (BFLA/BOLA)\r",
+          "//   NONE    -> không gửi Authorization (rỗng), dùng để test truy cập ẩn danh\r",
+          "// Nếu CSV không có cột 'auth_mode' (hoặc rỗng), mỗi request tự dùng vai trò mặc định của nó\r",
+          "// (khai báo trong defaultAuthModeByRequest bên dưới) để không phá các test hiện có.\r",
+          "// Request nào muốn dùng cơ chế này chỉ cần đặt header Authorization = {{authHeader}}.\r",
+          "// =============================================\r",
+          "const defaultAuthModeByRequest = {\r",
+          "    'FR08 — Checkout': 'USER',\r",
+          "    'FR08 — Xem Giỏ Hàng': 'USER',\r",
+          "    'FR08 — Thêm Giỏ Hàng': 'USER',\r",
+          "    'FR08 — Xem Danh Sách Đơn Hàng': 'USER',\r",
+          "    'FR08 — Xem Chi Tiết Đơn Hàng': 'USER',\r",
+          "    'FR14 — Lấy Danh Sách Category': 'ADMIN',\r",
+          "    'FR14 — Thêm Category': 'ADMIN',\r",
+          "    'FR14 — Cập Nhật Category': 'ADMIN',\r",
+          "    'FR14 — Xóa Category': 'ADMIN'\r",
+          "};\r",
+          "\r",
+          "const authMode = (pm.iterationData.get('auth_mode') || defaultAuthModeByRequest[pm.info.requestName] || '').toUpperCase();\r",
+          "let resolvedAuth = '';\r",
+          "if (authMode === 'ADMIN') {\r",
+          "    resolvedAuth = 'Bearer ' + (pm.environment.get('adminToken') || '');\r",
+          "} else if (authMode === 'USER') {\r",
+          "    resolvedAuth = 'Bearer ' + (pm.environment.get('userToken') || '');\r",
+          "} else if (authMode === 'INVALID') {\r",
+          "    resolvedAuth = 'Bearer invalid.token.xyz';\r",
+          "} else if (authMode === 'NONE') {\r",
+          "    resolvedAuth = '';\r",
+          "}\r",
+          "pm.environment.set('authHeader', resolvedAuth);\r"
         ]
       }
     },

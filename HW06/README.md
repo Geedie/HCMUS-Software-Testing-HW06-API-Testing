@@ -1,0 +1,1 @@
+newman run ".\New Collection.postman_collection.json" -e ".\New Environment.postman_environment.json" -d ".\data.csv" -r cli,htmlextra --reporter-htmlextra-export ".\reports\eshop-report.html"

@@ -14,6 +14,47 @@ http://localhost:3000
 
 3. API chính
 
+
+3.1 API CONTRACT / REQUEST
+
+### Endpoint 1 - Product Listing & Search
+- Method: GET
+- Endpoint: /api/products
+- Full URL: http://localhost:3000/api/products
+- Authentication: Không yêu cầu
+- Query:
+  - search: Optional
+  - Format: ?search=keyword
+- Request Body: Không có
+- Ví dụ Request:
+  GET /api/products
+  GET /api/products?search=iPhone
+- Response thành công:
+  - HTTP 200
+  - JSON array products
+
+### Endpoint 2 - Product Detail
+- Method: GET
+- Endpoint: /api/products/:id
+- Full URL: http://localhost:3000/api/products/:id
+- Authentication: Không yêu cầu
+- Path parameter:
+  - id: Product ID
+- Request Body: Không có
+- Ví dụ Request:
+  GET /api/products/1
+  GET /api/products/2
+- Response:
+  - Product tồn tại: HTTP 200, trả về product
+  - Product không tồn tại: HTTP 200, Body = {}
+
+### Endpoint 3 - Category dependency (optional)
+- Method: GET
+- Endpoint: /api/categories
+- Authentication: Không yêu cầu
+- Request Body: Không có
+- Mục đích: Đối chiếu category_id của product với danh sách category.
+
 GET /api/products
 
 Mục đích:
@@ -219,6 +260,98 @@ Response:
 Sau đó dùng:
 
 Authorization: Bearer <token>
+
+
+3.1 API CONTRACT / ENDPOINT / REQUEST
+
+### Endpoint 1 - Login
+- Method: POST
+- Endpoint: /api/login
+- Full URL: http://localhost:3000/api/login
+- Authentication: Không yêu cầu
+- Request Body (JSON):
+  {
+    "email": "test@domain.com",
+    "password": "Password123!"
+  }
+- Response thành công:
+  - HTTP 200
+  - Có JWT `token`
+  - Có thông tin `user`
+- Dùng token nhận được cho các API yêu cầu authentication.
+
+### Endpoint 2 - Get Cart
+- Method: GET
+- Endpoint: /api/cart
+- Authentication: Required
+- Header:
+  Authorization: Bearer <token>
+- Request Body: Không có
+- Response:
+  - JSON array
+
+### Endpoint 3 - Add to Cart
+- Method: POST
+- Endpoint: /api/cart
+- Authentication: Required
+- Header:
+  Authorization: Bearer <token>
+- Request Body (JSON):
+  {
+    "id": 1,
+    "name": "Sản phẩm A",
+    "price": 100000,
+    "quantity": 2
+  }
+- Response thành công:
+  - HTTP 200
+  - {"message":"Added to cart"}
+
+### Endpoint 4 - Checkout
+- Method: POST
+- Endpoint: /api/checkout
+- Authentication: Required
+- Header:
+  Authorization: Bearer <token>
+- Request Body (JSON):
+  {
+    "total_amount": 200000,
+    "shipping_address": "123 Le Loi, TP.HCM"
+  }
+- Response thành công:
+  - HTTP 200
+  - {"message":"Checkout successful","orderId":<id>}
+
+### Endpoint 5 - My Orders
+- Method: GET
+- Endpoint: /api/orders/my-orders
+- Authentication: Required
+- Header:
+  Authorization: Bearer <token>
+- Request Body: Không có
+- Mục đích: Lấy lịch sử order của user hiện tại.
+
+### Endpoint 6 - Order Detail
+- Method: GET
+- Endpoint: /api/orders/:id
+- Authentication: Theo API Specification: không yêu cầu authenticateToken
+- Path parameter:
+  - id: Order ID
+- Request Body: Không có
+- Response:
+  - Order tồn tại: trả về order
+  - Không tồn tại: HTTP 404, {"error":"Order not found"}
+
+### Endpoint 7 - Cancel Order
+- Method: PUT
+- Endpoint: /api/orders/:id/cancel
+- Authentication: Theo API Specification: yêu cầu Bearer token
+- Header:
+  Authorization: Bearer <token>
+- Path parameter:
+  - id: Order ID
+- Request Body: Không được API Specification cung cấp
+- Mô tả: Chuyển trạng thái đơn hàng sang `canceled`; chỉ được thực hiện khi đơn hàng chưa giao.
 
 4. Cart API
 
@@ -490,6 +623,69 @@ CRUD Category:
 - Read
 - Update
 - Delete
+
+
+4.1 API CONTRACT / ENDPOINT / REQUEST
+
+### Endpoint 1 - Get Categories
+- Method: GET
+- Endpoint: /api/categories
+- Full URL: http://localhost:3000/api/categories
+- Authentication: Không yêu cầu
+- Request Body: Không có
+- Response thành công:
+  - HTTP 200
+  - JSON array
+- Ví dụ Request:
+  GET /api/categories
+
+### Endpoint 2 - Create Category
+- Method: POST
+- Endpoint: /api/categories
+- Authentication: Required
+- Header:
+  Authorization: Bearer <token>
+- Request Body (JSON):
+  {
+    "name": "Tên DM"
+  }
+- Response thành công:
+  - HTTP 200
+  - {"message":"Category created","id":<id>}
+
+### Endpoint 3 - Update Category
+- Method: PUT
+- Endpoint: /api/categories/:id
+- Authentication: Required
+- Header:
+  Authorization: Bearer <token>
+- Path parameter:
+  - id: Category ID
+- Request Body (JSON):
+  {
+    "name": "Tên mới"
+  }
+- Response thành công:
+  - HTTP 200
+  - {"message":"Category updated"}
+
+### Endpoint 4 - Delete Category
+- Method: DELETE
+- Endpoint: /api/categories/:id
+- Authentication: Required
+- Header:
+  Authorization: Bearer <token>
+- Path parameter:
+  - id: Category ID
+- Request Body: Không có
+- Response thành công:
+  - HTTP 200
+  - {"message":"Category deleted"}
+
+### Authorization requirement
+Theo API Specification, các API quản trị yêu cầu:
+- Authorization: Bearer <token>
+- Tài khoản phải có quyền Admin.
 
 2. Category schema
 
