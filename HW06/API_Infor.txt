@@ -1,0 +1,867 @@
+API infor
+============================================================
+FR05 - PRODUCT LISTING AND SEARCH
+============================================================
+
+1. Mục tiêu / phạm vi
+- Lấy danh sách sản phẩm.
+- Tìm kiếm sản phẩm theo tên.
+- Có thể kiểm tra dữ liệu trả về của product.
+- Product có liên kết với Category thông qua category_id.
+
+2. Base URL
+http://localhost:3000
+
+3. API chính
+
+GET /api/products
+
+Mục đích:
+- Lấy toàn bộ danh sách sản phẩm.
+- Tìm kiếm sản phẩm theo tên khi truyền query parameter search.
+
+Query parameter:
+- search=keyword
+- Optional.
+
+Ví dụ:
+GET /api/products
+GET /api/products?search=iPhone
+
+4. Authentication
+- API GET /api/products KHÔNG yêu cầu Authorization header.
+- Có thể test bằng anonymous user.
+
+5. Response từ implementation
+
+Khi KHÔNG có search:
+- Server thực hiện:
+  SELECT * FROM products
+- Trả về toàn bộ products dạng JSON array.
+
+Khi CÓ search:
+- Server thực hiện:
+  SELECT * FROM products
+  WHERE name LIKE '%<searchQuery>%'
+
+6. Product schema từ database
+
+products:
+- id: INTEGER, PRIMARY KEY, AUTOINCREMENT
+- name: TEXT
+- price: INTEGER
+- description: TEXT
+- imageUrl: TEXT
+- category_id: INTEGER
+
+7. Dữ liệu seed hiện có
+
+Product 1:
+- id = 1
+- name = iPhone 15 Pro Max
+- price = 30000000
+- description = Điện thoại cao cấp của Apple
+- category_id = 1
+
+Product 2:
+- id = 2
+- name = Samsung Galaxy S24 Ultra
+- price = 28000000
+- description = Màn hình hiển thị xuất sắc, camera siêu zoom
+- category_id = 1
+
+Product 3:
+- id = 3
+- name = MacBook Pro M3
+- price = 45000000
+- description = Laptop chuyên nghiệp mạnh mẽ
+- category_id = 2
+
+Product 4:
+- id = 4
+- name = Tai nghe AirPods Pro 2
+- price = 6000000
+- description = Chống ồn chủ động xuất sắc
+- category_id = 3
+
+Product 5:
+- id = 5
+- name = Bàn phím cơ Keychron Q1
+- price = 4000000
+- description = Gõ cực sướng, thiết kế kim loại
+- category_id = 3
+
+8. Category seed liên quan
+
+category_id = 1
+- Điện thoại
+
+category_id = 2
+- Laptop
+
+category_id = 3
+- Phụ kiện
+
+9. Test conditions nên bao phủ
+
+Listing:
+- GET không có query parameter.
+- Kiểm tra status code.
+- Kiểm tra response là array.
+- Kiểm tra số lượng sản phẩm.
+- Kiểm tra các field:
+  id
+  name
+  price
+  description
+  imageUrl
+  category_id
+- Kiểm tra kiểu dữ liệu.
+- Kiểm tra dữ liệu thực tế khớp database.
+
+Search:
+- Search bằng từ khóa tồn tại.
+- Search bằng tên đầy đủ.
+- Search bằng một phần tên.
+- Search không có kết quả.
+- Search với chữ hoa/chữ thường.
+- Search với chuỗi rỗng.
+- Search với ký tự đặc biệt.
+- Search bằng Unicode.
+- Search bằng số.
+- Search có nhiều ký tự.
+- Search với khoảng trắng.
+- Search có query parameter không hợp lệ.
+
+10. Điểm quan trọng trong implementation
+
+Search sử dụng SQL string interpolation:
+
+SELECT * FROM products WHERE name LIKE '%${searchQuery}%'
+
+=> Đây là điểm cần kiểm thử đặc biệt về:
+- SQL Injection.
+- Ký tự đặc biệt.
+- Input malformed.
+
+11. API xem chi tiết có thể dùng để hỗ trợ FR05
+
+GET /api/products/:id
+
+Không yêu cầu authentication.
+
+Behavior:
+- Nếu id tồn tại: trả về product.
+- Nếu id không tồn tại:
+  HTTP 200
+  Body = {}
+
+Đặc biệt:
+- Nếu product.id là số chẵn:
+  row.price = row.price.toString()
+
+=> Product id chẵn có price dạng STRING.
+=> Product id lẻ có price dạng INTEGER.
+
+Dùng để kiểm tra:
+- Schema consistency.
+- Data type consistency.
+- Response contract.
+
+
+============================================================
+FR08 - CHECKOUT
+============================================================
+
+1. Mục tiêu / phạm vi
+- Lấy cart.
+- Thêm product vào cart.
+- Checkout.
+- Tạo order.
+- Xác minh order sau checkout.
+
+2. Authentication
+
+Các API Cart/Checkout yêu cầu:
+
+Authorization: Bearer <token>
+
+Token lấy từ:
+
+POST /api/login
+
+Test users từ database:
+
+Admin:
+- email: admin@eshop.com
+- password: Admin123!
+- role: admin
+
+User:
+- email: test@eshop.com
+- password: Test1234!
+- role: user
+
+3. Authentication flow
+
+POST /api/login
+
+Body:
+{
+  "email": "test@eshop.com",
+  "password": "Test1234!"
+}
+
+Response:
+- token
+- user
+
+Sau đó dùng:
+
+Authorization: Bearer <token>
+
+4. Cart API
+
+GET /api/cart
+
+Mục đích:
+- Lấy cart của user hiện tại.
+
+Auth:
+- Required.
+
+Implementation:
+- Cart được lưu trong memory bằng:
+  const userCarts = {};
+
+- Cart được phân biệt theo userId.
+
+Nếu user chưa có cart:
+- Server tạo array rỗng.
+
+Response:
+- JSON array.
+
+5. Add to cart
+
+POST /api/cart
+
+Auth:
+- Required.
+
+Body:
+{
+  "id": 1,
+  "name": "Sản phẩm A",
+  "price": 100000,
+  "quantity": 2
+}
+
+Implementation:
+- Server push toàn bộ req.body vào cart.
+- Không validate product.
+- Không validate quantity.
+- Không validate price.
+- Không kiểm tra product có tồn tại trong database.
+- Không tính lại price từ database.
+
+Response:
+{
+  "message": "Added to cart"
+}
+
+6. Checkout API
+
+POST /api/checkout
+
+Auth:
+- Required.
+
+Body:
+{
+  "total_amount": 200000,
+  "shipping_address": "123 Le Loi, TP.HCM"
+}
+
+Implementation lấy:
+- userId từ JWT.
+- total_amount từ request body.
+- shipping_address từ request body.
+
+Server insert:
+
+orders:
+- user_id
+- total_amount
+- status = "pending"
+- shipping_address
+
+Response:
+
+{
+  "message": "Checkout successful",
+  "orderId": <id>
+}
+
+7. Order schema
+
+orders:
+- id: INTEGER PRIMARY KEY AUTOINCREMENT
+- user_id: INTEGER
+- total_amount: INTEGER
+- status: TEXT DEFAULT 'pending'
+- shipping_address: TEXT
+- created_at: DATETIME DEFAULT CURRENT_TIMESTAMP
+
+8. Expected checkout state
+
+Sau checkout thành công:
+
+status = pending
+
+Ví dụ:
+
+POST /api/checkout
+        |
+        v
+INSERT orders
+        |
+        v
+status = pending
+        |
+        v
+orderId được trả về
+
+9. API xác minh sau checkout
+
+GET /api/orders/my-orders
+
+Auth:
+- Required.
+
+Mục đích:
+- Lấy tất cả order của user hiện tại.
+
+Query:
+SELECT * FROM orders
+WHERE user_id = ?
+ORDER BY id DESC
+
+Dùng để verify:
+- Order vừa tạo có tồn tại.
+- user_id đúng.
+- total_amount đúng.
+- status = pending.
+- shipping_address đúng.
+- orderId đúng.
+
+10. API xem order
+
+GET /api/orders/:id
+
+Không có authenticateToken.
+
+Nếu order không tồn tại:
+- HTTP 404
+- {"error": "Order not found"}
+
+Nếu tồn tại:
+- trả về order.
+
+Đây là điểm cần test về authorization:
+- User A có thể truy cập order của User B hay không.
+
+11. Checkout test conditions
+
+Authentication:
+- Không có token.
+- Token invalid.
+- Token expired/không hợp lệ.
+- Token của user khác.
+
+Positive:
+- Checkout với total_amount hợp lệ.
+- Checkout với shipping_address hợp lệ.
+- Checkout tạo order thành công.
+- Order được tạo với status = pending.
+- orderId được trả về.
+- Order xuất hiện trong my-orders.
+
+Negative:
+- Thiếu total_amount.
+- Thiếu shipping_address.
+- total_amount = 0.
+- total_amount âm.
+- total_amount rất lớn.
+- total_amount không phải number.
+- shipping_address rỗng.
+- shipping_address null.
+- shipping_address quá dài.
+- Request body malformed.
+- Request body có field thừa.
+
+Cart:
+- Get cart khi chưa có dữ liệu.
+- Add product hợp lệ.
+- Add nhiều product.
+- Quantity = 0.
+- Quantity âm.
+- Quantity rất lớn.
+- Product ID không tồn tại.
+- Price không khớp database.
+- Name không khớp database.
+
+Data integrity:
+- So sánh total_amount request với giá trị thực tế trong cart.
+- Kiểm tra server có tính lại total hay không.
+- Kiểm tra userId lấy từ token chứ không lấy từ request.
+- Kiểm tra order được tạo đúng user.
+
+12. Điểm quan trọng / potential defects trong implementation
+
+A. Checkout không kiểm tra cart
+
+POST /api/checkout chỉ lấy:
+- total_amount
+- shipping_address
+
+Không đọc userCarts[userId].
+
+=> Có thể checkout ngay cả khi cart rỗng.
+
+B. Checkout không tính lại total_amount
+
+Server tin trực tiếp:
+req.body.total_amount
+
+=> Client có thể gửi total_amount tùy ý.
+
+C. Không validate total_amount
+
+Không có validation:
+- null
+- negative
+- zero
+- string
+- sai format
+
+D. Không validate shipping_address
+
+E. Không có transaction với cart/payment/inventory
+
+Checkout chỉ insert order.
+
+Không có:
+- payment
+- inventory deduction
+- cart clear
+
+F. Cart không nằm trong database
+
+Cart sử dụng in-memory object:
+
+const userCarts = {};
+
+=> Restart server có thể làm mất cart.
+
+G. POST /api/cart không validate product
+
+Có thể gửi object giả:
+
+{
+  "id": 999999,
+  "name": "Fake Product",
+  "price": 1,
+  "quantity": 999999
+}
+
+và server vẫn thêm vào cart.
+
+
+============================================================
+FR14 - CATEGORY MANAGEMENT CRUD
+============================================================
+
+1. Mục tiêu / phạm vi
+
+CRUD Category:
+
+- Create
+- Read
+- Update
+- Delete
+
+2. Category schema
+
+categories:
+- id: INTEGER PRIMARY KEY AUTOINCREMENT
+- name: TEXT
+
+3. Category seed
+
+id = 1
+name = Điện thoại
+
+id = 2
+name = Laptop
+
+id = 3
+name = Phụ kiện
+
+4. GET categories
+
+GET /api/categories
+
+Auth:
+- KHÔNG yêu cầu authentication.
+
+Implementation:
+SELECT * FROM categories
+
+Response:
+- JSON array.
+
+Test:
+- Get toàn bộ category.
+- Kiểm tra status.
+- Kiểm tra array.
+- Kiểm tra field id/name.
+- Kiểm tra category seed.
+- Kiểm tra kiểu dữ liệu.
+- Kiểm tra empty database nếu có thể reset.
+
+5. CREATE category
+
+POST /api/categories
+
+Auth:
+- Required:
+  Authorization: Bearer <token>
+
+Body:
+
+{
+  "name": "Tên DM"
+}
+
+Implementation:
+INSERT INTO categories (name)
+VALUES (?)
+
+Response:
+
+{
+  "message": "Category created",
+  "id": <id>
+}
+
+Test:
+- Tạo category hợp lệ.
+- Name rỗng.
+- Name null.
+- Name không phải string.
+- Name quá dài.
+- Name trùng.
+- Name chứa Unicode.
+- Name chứa special characters.
+- Không gửi body.
+- Không gửi name.
+
+Sau create:
+- GET /api/categories.
+- Kiểm tra category mới tồn tại.
+- Kiểm tra id được trả về.
+
+6. UPDATE category
+
+PUT /api/categories/:id
+
+Auth:
+- Required.
+
+Body:
+
+{
+  "name": "Tên mới"
+}
+
+Implementation:
+UPDATE categories
+SET name = ?
+WHERE id = ?
+
+Response:
+
+{
+  "message": "Category updated"
+}
+
+Test:
+- Update category tồn tại.
+- Update category không tồn tại.
+- ID = 0.
+- ID âm.
+- ID không phải số.
+- Name rỗng.
+- Name null.
+- Name sai kiểu.
+- Name trùng category khác.
+
+Sau update:
+- GET /api/categories.
+- Xác minh name đã thay đổi.
+
+7. DELETE category
+
+DELETE /api/categories/:id
+
+Auth:
+- Required.
+
+Implementation:
+DELETE FROM categories
+WHERE id = ?
+
+Response:
+
+{
+  "message": "Category deleted"
+}
+
+Test:
+- Delete category tồn tại.
+- Delete category không tồn tại.
+- Delete id = 0.
+- Delete id âm.
+- Delete ID invalid.
+- Delete category đang được product sử dụng.
+
+Sau delete:
+- GET /api/categories.
+- Xác minh category đã bị xóa.
+
+8. Authentication / Authorization test
+
+Theo API Specification:
+
+Admin APIs yêu cầu:
+- Authorization Bearer token
+- tài khoản phải có quyền Admin.
+
+Tuy nhiên implementation của các API category chỉ dùng:
+
+authenticateToken
+
+Không có kiểm tra:
+
+req.user.role === "admin"
+
+=> User thường có token hợp lệ cũng có thể gọi:
+- POST /api/categories
+- PUT /api/categories/:id
+- DELETE /api/categories/:id
+
+Đây là điểm security/authorization rất quan trọng cần test.
+
+Test tối thiểu:
+
+1. Không token
+   => Expected:
+   401 Unauthorized
+
+2. Token invalid
+   => Expected:
+   403 Forbidden
+
+3. User token hợp lệ
+   => Kiểm tra user thường có thể CRUD hay không.
+
+4. Admin token hợp lệ
+   => Kiểm tra CRUD hoạt động bình thường.
+
+9. Business/data integrity cần kiểm tra
+
+Category được product tham chiếu bằng:
+
+products.category_id
+
+Nhưng database không khai báo FOREIGN KEY.
+
+=> Có thể tồn tại:
+- product.category_id không tồn tại.
+- category bị delete trong khi product vẫn còn category_id cũ.
+
+Test:
+- Tạo category.
+- Tạo product sử dụng category đó.
+- Delete category.
+- GET product.
+- Kiểm tra category_id còn tồn tại hay trở thành orphan reference.
+
+10. Duplicate category
+
+Database:
+
+name TEXT
+
+Không có:
+UNIQUE(name)
+
+=> Có thể tạo nhiều category cùng tên.
+
+Test:
+POST /api/categories
+{
+  "name": "Laptop"
+}
+
+nhiều lần.
+
+Kiểm tra hệ thống có cho phép duplicate hay không.
+
+
+============================================================
+CÁC API DEPENDENCY CHÍNH
+============================================================
+
+FR05:
+- GET /api/products
+- GET /api/products/:id
+- GET /api/categories (nếu cần đối chiếu category)
+
+FR08:
+- POST /api/login
+- GET /api/products
+- GET /api/cart
+- POST /api/cart
+- POST /api/checkout
+- GET /api/orders/my-orders
+- GET /api/orders/:id
+
+FR14:
+- POST /api/login
+- GET /api/categories
+- POST /api/categories
+- PUT /api/categories/:id
+- DELETE /api/categories/:id
+
+
+============================================================
+DATABASE DATA RELEVANT CHO 3 FR
+============================================================
+
+Categories:
+
+1 - Điện thoại
+2 - Laptop
+3 - Phụ kiện
+
+Products:
+
+1 - iPhone 15 Pro Max
+   price = 30000000
+   category_id = 1
+
+2 - Samsung Galaxy S24 Ultra
+   price = 28000000
+   category_id = 1
+
+3 - MacBook Pro M3
+   price = 45000000
+   category_id = 2
+
+4 - Tai nghe AirPods Pro 2
+   price = 6000000
+   category_id = 3
+
+5 - Bàn phím cơ Keychron Q1
+   price = 4000000
+   category_id = 3
+
+Users:
+
+Admin:
+email = admin@eshop.com
+password = Admin123!
+role = admin
+
+Test User:
+email = test@eshop.com
+password = Test1234!
+role = user
+
+
+============================================================
+CÁC ĐIỂM RỦI RO / DEFECT NÊN ƯU TIÊN TEST
+============================================================
+
+FR05:
+1. SQL Injection trong search parameter.
+2. Search không có kết quả.
+3. Search với special characters.
+4. Data type inconsistency của price trong GET /api/products/:id.
+5. API không yêu cầu authentication.
+
+FR08:
+1. Checkout không kiểm tra cart.
+2. Client có thể tự gửi total_amount.
+3. Không validate total_amount.
+4. Không validate shipping_address.
+5. Có thể add fake/non-existing product vào cart.
+6. Có thể tự thay đổi price gửi vào cart.
+7. Cart chỉ lưu memory.
+8. GET /api/orders/:id không yêu cầu authentication.
+9. Có khả năng truy cập order của user khác.
+10. Checkout không xử lý inventory/payment/transaction.
+
+FR14:
+1. POST/PUT/DELETE category chỉ kiểm tra authentication, không kiểm tra role admin.
+2. User thường có khả năng CRUD category.
+3. Không có validation cho name.
+4. Cho phép duplicate category name.
+5. Không có foreign key giữa products.category_id và categories.id.
+6. Có thể xóa category đang được product sử dụng.
+```
+
+### Workflow test nên dùng cho 3 FR
+
+```text
+FR05
+Login (optional)
+→ GET /api/categories (optional)
+→ GET /api/products
+→ GET /api/products?search=keyword
+→ GET /api/products/:id
+→ Validate Status
+→ Validate Schema
+→ Validate Data
+→ Validate Search Behavior
+→ Security Test
+
+FR08
+POST /api/login
+→ GET /api/products
+→ GET /api/cart
+→ POST /api/cart
+→ GET /api/cart
+→ POST /api/checkout
+→ GET /api/orders/my-orders
+→ GET /api/orders/:id
+→ Validate Order
+→ Validate User Ownership
+→ Validate Data Integrity
+→ Negative Test
+
+FR14
+POST /api/login (Admin/User)
+→ GET /api/categories
+→ POST /api/categories
+→ GET /api/categories
+→ PUT /api/categories/:id
+→ GET /api/categories
+→ DELETE /api/categories/:id
+→ GET /api/categories
+→ Authorization Test
+→ Validation Test
+→ Data Integrity Test
+```

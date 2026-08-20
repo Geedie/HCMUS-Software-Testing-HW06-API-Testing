@@ -1,0 +1,89 @@
+# Test Case — FR05: Product Listing and Search
+
+**Base URL:** `http://localhost:3000`
+**Endpoint chính:** `GET /api/products` (list + search qua `?search=`), hỗ trợ bởi `GET /api/products/:id`
+**Authentication:** Không yêu cầu (anonymous)
+**Seed data:** 5 products (id 1–5), 3 categories (id 1=Điện thoại, 2=Laptop, 3=Phụ kiện)
+
+**Ghi chú rủi ro quan trọng đã xác định khi phân tích spec** (lý do các case bên dưới được ưu tiên như vậy):
+- Search dùng string interpolation trực tiếp vào SQL (`WHERE name LIKE '%${searchQuery}%'`) → rủi ro SQL Injection nghiêm trọng, cần test riêng, ưu tiên cao nhất.
+- `GET /api/products/:id` trả **200 + `{}`** khi không tìm thấy, thay vì 404 — hành vi khác chuẩn REST thông thường, cần test rõ để không bị coi nhầm là bug hoặc bỏ sót.
+- `price` là **STRING** khi `id` chẵn và **INTEGER** khi `id` lẻ — đây là một business rule/bug ẩn trong implementation, rất dễ làm client crash nếu không phát hiện qua test kiểu dữ liệu.
+
+---
+
+## Nhóm 1 — Listing: GET /api/products (không có search)
+
+| ID | Mục tiêu | Test data / Precondition | Expected Result | Priority |
+|---|---|---|---|---|
+| TC-FR05-01 | Status code khi lấy toàn bộ danh sách | `GET /api/products`, không kèm Authorization | HTTP `200` | High |
+| TC-FR05-02 | Response trả về là JSON array | `GET /api/products` | Body là array (không phải object) | High |
+| TC-FR05-03 | Số lượng sản phẩm khớp seed data | `GET /api/products` | Array có đúng `5` phần tử | High |
+| TC-FR05-04 | Mỗi product có đủ field theo schema | `GET /api/products` | Mỗi item có đủ: `id, name, price, description, imageUrl, category_id` — không thiếu field | High |
+| TC-FR05-05 | Kiểu dữ liệu của từng field đúng schema | `GET /api/products` | `id`: number, `name`: string, `description`: string, `category_id`: number, `price`: number **hoặc** string tuỳ id chẵn/lẻ (xem Nhóm 4) | High |
+| TC-FR05-06 | Dữ liệu thực tế khớp DB — product id=1 | `GET /api/products` | Item với `id=1` có `name="iPhone 15 Pro Max"`, `price=30000000`, `category_id=1` | High |
+| TC-FR05-07 | Dữ liệu thực tế khớp DB — product id=3 | `GET /api/products` | Item với `id=3` có `name="MacBook Pro M3"`, `price=45000000`, `category_id=2` | Medium |
+| TC-FR05-08 | Liên kết category_id hợp lệ (referential integrity) | `GET /api/products` | Mọi `category_id` trả về đều thuộc tập `{1,2,3}` đã seed, không có category_id "mồ côi" | Medium |
+| TC-FR05-09 | Response Content-Type đúng chuẩn | `GET /api/products` | Header `Content-Type: application/json` | Low |
+| TC-FR05-10 | API hoạt động không cần Authorization (anonymous) | `GET /api/products` không kèm header `Authorization` | `200`, trả về đầy đủ danh sách như bình thường | Medium |
+| TC-FR05-11 | API vẫn hoạt động bình thường nếu có Authorization header rác/không hợp lệ (vì spec nói không yêu cầu auth) | `GET /api/products` với `Authorization: Bearer invalid-garbage-token` | `200`, kết quả không đổi so với TC-FR05-01 (header bị bỏ qua, không gây lỗi) | Low |
+
+---
+
+## Nhóm 2 — Search: happy path & các biến thể từ khoá hợp lệ
+
+| ID | Mục tiêu | Test data | Expected Result | Priority |
+|---|---|---|---|---|
+| TC-FR05-12 | Search bằng từ khoá tồn tại (một phần tên) | `GET /api/products?search=iPhone` | `200`, trả về đúng 1 sản phẩm — id=1 | High |
+| TC-FR05-13 | Search bằng tên đầy đủ, khớp chính xác | `GET /api/products?search=iPhone 15 Pro Max` | `200`, trả về đúng sản phẩm id=1 | High |
+| TC-FR05-14 | Search bằng một phần tên ở giữa chuỗi (kiểm tra `LIKE %...%`) | `GET /api/products?search=Pro` | `200`, trả về các sản phẩm có "Pro" trong tên: id=1 (iPhone 15 **Pro** Max), id=3 (MacBook **Pro** M3), id=4 (AirPods **Pro** 2) | High |
+| TC-FR05-15 | Search không có kết quả khớp | `GET /api/products?search=Xiaomi` | `200`, trả về array rỗng `[]` (không phải lỗi) | High |
+| TC-FR05-16 | Search không phân biệt hoa/thường — chữ thường | `GET /api/products?search=iphone` | `200`, trả về sản phẩm id=1 nếu match không phân biệt hoa thường; nếu implementation phân biệt hoa thường thì trả về `[]` — **ghi nhận kết quả thực tế để xác nhận behavior**, không giả định trước | High |
+| TC-FR05-17 | Search không phân biệt hoa/thường — chữ hoa toàn bộ | `GET /api/products?search=IPHONE` | Kết quả phải nhất quán với TC-FR05-16 (cùng match hoặc cùng không match) | High |
+| TC-FR05-18 | Search bằng số nằm trong tên sản phẩm | `GET /api/products?search=15` | `200`, trả về sản phẩm id=1 ("iPhone **15** Pro Max") | Medium |
+| TC-FR05-19 | Search với chuỗi Unicode tiếng Việt (không khớp field name, chỉ có trong description) | `GET /api/products?search=Điện thoại` | `200`, trả về `[]` vì search chỉ áp dụng trên `name`, không áp dụng trên `description` — xác nhận đúng scope của search | Medium |
+| TC-FR05-20 | Search với nhiều ký tự dài (partial match hợp lệ, không quá dài) | `GET /api/products?search=Bàn phím cơ Keychron` | `200`, trả về sản phẩm id=5 | Low |
+
+---
+
+## Nhóm 3 — Search: boundary, input bất thường & query parameter không hợp lệ
+
+| ID | Mục tiêu | Test data | Expected Result | Priority |
+|---|---|---|---|---|
+| TC-FR05-21 | Search với chuỗi rỗng | `GET /api/products?search=` | `200`; theo logic `LIKE '%%'`, kết quả mong đợi là trả về **toàn bộ 5 sản phẩm** (vì chuỗi rỗng khớp với mọi giá trị) — xác nhận đúng behavior thực tế | High |
+| TC-FR05-22 | Không truyền query parameter search | `GET /api/products` (đối chiếu lại, để phân biệt rõ với case search rỗng ở trên) | `200`, trả về toàn bộ 5 sản phẩm — hành vi phải giống hệt TC-FR05-21 | Medium |
+| TC-FR05-23 | Search chỉ gồm khoảng trắng | `GET /api/products?search=%20%20%20` (3 dấu space) | `200`; xác nhận có được trim hay không — nếu không trim, khớp `LIKE '%   %'` thường không match tên nào → `[]`; nếu có trim → như search rỗng, trả toàn bộ | Medium |
+| TC-FR05-24 | Search có khoảng trắng ở đầu/cuối từ khoá hợp lệ | `GET /api/products?search=%20iPhone%20` | `200`; xác nhận có trim trước khi so khớp không — ghi nhận kết quả thực tế (match hay không match id=1) | Medium |
+| TC-FR05-25 | Search với ký tự đặc biệt không mang tính injection | `GET /api/products?search=@#$%^&*()` | `200`, không có lỗi 500; trả về `[]` (không server crash dù ký tự lạ) | High |
+| TC-FR05-26 | Search với ký tự `%` — trùng với wildcard của SQL LIKE | `GET /api/products?search=%` | `200`; vì query thực tế là `LIKE '%%%'`, cần xác nhận có trả về toàn bộ sản phẩm hay không — đây là điểm dễ gây hiểu nhầm giữa "wildcard hợp lệ" và "input không kiểm soát" | Medium |
+| TC-FR05-27 | Search với chuỗi rất dài (vượt độ dài tên sản phẩm thông thường) | `GET /api/products?search=` + chuỗi 500 ký tự ngẫu nhiên | `200`, không có lỗi 500/timeout; trả về `[]` | Medium |
+| TC-FR05-28 | Search truyền query parameter dạng mảng (client gửi sai kiểu) | `GET /api/products?search[]=iPhone` | Không có lỗi 500; server xử lý an toàn (có thể ignore, trả `[]`, hoặc coi như không có search) — ghi nhận behavior thực tế, không được crash | High |
+| TC-FR05-29 | Search truyền nhiều query parameter `search` trùng tên | `GET /api/products?search=iPhone&search=Samsung` | Không có lỗi 500; server chỉ nên xử lý nhất quán một giá trị (thường là giá trị đầu hoặc cuối tuỳ framework) — ghi nhận và xác nhận nhất quán | Medium |
+
+---
+
+## Nhóm 4 — Security: SQL Injection (ưu tiên cao nhất do implementation dùng string interpolation trực tiếp)
+
+| ID | Mục tiêu | Test data | Expected Result | Priority |
+|---|---|---|---|---|
+| TC-FR05-30 | SQL Injection dạng tautology (luôn đúng) không được trả về toàn bộ dữ liệu ngoài ý muốn | `GET /api/products?search=' OR '1'='1` | Không có lỗi 500. **Phải xác nhận rõ**: nếu injection thành công, response sẽ trả về toàn bộ hoặc dữ liệu vượt quá phạm vi tìm kiếm hợp lệ → đây là **lỗ hổng nghiêm trọng cần report Critical**, không phải kết quả "pass" dù status code là 200 | Critical |
+| TC-FR05-31 | SQL Injection dạng phá hoại (DROP TABLE) không được thực thi | `GET /api/products?search='; DROP TABLE products; --` | Không có lỗi 500. Sau khi gửi request này, **chạy lại TC-FR05-01 để xác nhận bảng `products` và toàn bộ 5 sản phẩm vẫn còn nguyên vẹn** — nếu dữ liệu bị mất, đây là lỗ hổng Critical | Critical |
+| TC-FR05-32 | SQL Injection dạng UNION SELECT (thử lấy dữ liệu ngoài bảng products) | `GET /api/products?search=' UNION SELECT * FROM sqlite_master --` | Không có lỗi 500, không có dữ liệu bảng hệ thống hoặc bảng khác bị lộ ra trong response | Critical |
+| TC-FR05-33 | SQL Injection dùng ký tự comment để bỏ qua phần còn lại của query | `GET /api/products?search=iPhone'--` | Không có lỗi 500; xác nhận kết quả trả về không bị thao túng ngoài phạm vi tìm kiếm hợp lệ theo tên | High |
+
+---
+
+## Nhóm 5 — GET /api/products/:id (hỗ trợ FR05: schema consistency, data type, not-found behavior)
+
+| ID | Mục tiêu | Test data | Expected Result | Priority |
+|---|---|---|---|---|
+| TC-FR05-34 | Product tồn tại, id lẻ → xác nhận `price` là kiểu **INTEGER** (business rule ẩn của implementation) | `GET /api/products/1` | `200`; `price` trong response có kiểu **number** (`30000000`, không phải chuỗi `"30000000"`) | High |
+| TC-FR05-35 | Product tồn tại, id chẵn → xác nhận `price` là kiểu **STRING** (khác với id lẻ — đây là điểm dễ làm client crash nếu không kiểm tra) | `GET /api/products/2` | `200`; `price` trong response có kiểu **string** (`"28000000"`, không phải number) — nếu đội dev không chủ đích thiết kế vậy, **flag là defect nghiêm trọng về schema consistency** | Critical |
+
+---
+
+## Ghi chú bổ sung (không tính vào 35 case, nhưng nên nêu khi báo cáo)
+
+- **TC-FR05-34 và 35** cho thấy response schema của `price` **không nhất quán giữa các bản ghi** (int vs string tuỳ id chẵn/lẻ). Đây gần như chắc chắn là defect thực (không phải business rule hợp lệ) — nên tạo defect report riêng theo template kèm bằng chứng là 2 response thực tế, thay vì chỉ ghi trong test case.
+- **`GET /api/products/:id` với id không tồn tại trả `200 + {}`** thay vì `404` là hành vi lệch chuẩn REST — nên hỏi lại team business/API owner xem đây là chủ đích hay defect trước khi kết luận trong exit criteria, vì nó ảnh hưởng đến mọi client đang phân biệt "not found" theo status code.
+- Các case Nhóm 4 (SQL Injection) là **ưu tiên cao nhất trong toàn bộ FR05** — nếu bất kỳ case nào trong nhóm này cho thấy injection thành công, nên chặn release (Exit Criteria không đạt) bất kể các nhóm khác pass hết.
