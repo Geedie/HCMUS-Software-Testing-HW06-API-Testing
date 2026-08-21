@@ -1,0 +1,3 @@
+[submodule "eshop-sut"]
+	path = eshop-sut
+	url = https://github.com/ttbhanh/eshop-sut
