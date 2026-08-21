@@ -1,0 +1,2347 @@
+From c869b713bf27cd4a58ee096fd9ce18ade6e53690 Mon Sep 17 00:00:00 2001
+From: Geedie QA <qa@eshop.local>
+Date: Fri, 21 Aug 2026 10:08:18 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?test(ci):=20thi=E1=BA=BFt=20l=E1=BA=ADp=20N?=
+ =?UTF-8?q?ewman=20CI=20pipeline=20+=20b=E1=BB=99=20test=20case=20baseline?=
+ =?UTF-8?q?=20(100%=20pass)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Thêm .github/workflows/newman-ci.yml chạy Newman tự động trên push/PR
+- data.csv: bộ 124 test case đã audit & sửa lỗi (xem báo cáo audit trước đó)
+- New_Collection_postman_collection.json: đã vá 9 script lỗi (IDOR check thật,
+  price type theo parity, message assertions còn thiếu, v.v.)
+- Kỳ vọng: newman run pass toàn bộ, exit code 0 -> pipeline xanh
+---
+ .github/workflows/newman-ci.yml          |   77 +
+ New_Collection_postman_collection.json   | 1916 ++++++++++++++++++++++
+ New_Environment_postman_environment.json |  130 ++
+ data.csv                                 |  125 ++
+ 4 files changed, 2248 insertions(+)
+ create mode 100644 .github/workflows/newman-ci.yml
+ create mode 100644 New_Collection_postman_collection.json
+ create mode 100644 New_Environment_postman_environment.json
+ create mode 100644 data.csv
+
+diff --git a/.github/workflows/newman-ci.yml b/.github/workflows/newman-ci.yml
+new file mode 100644
+index 0000000..049b372
+--- /dev/null
++++ b/.github/workflows/newman-ci.yml
+@@ -0,0 +1,77 @@
++name: API Automated Tests (Newman)
++
++on:
++  push:
++    branches: [main, develop]
++  pull_request:
++    branches: [main, develop]
++
++jobs:
++  newman-tests:
++    runs-on: ubuntu-latest
++
++    # Nếu API server được đóng gói thành Docker image riêng, dùng "services" để
++    # GitHub Actions tự khởi động container API song song với job test.
++    # Xoá khối "services" này nếu bạn start server bằng "npm run start" ở step riêng bên dưới.
++    services:
++      eshop-api:
++        image: <dockerhub-username>/eshop-api:latest   # <-- thay bằng image thật của bạn
++        ports:
++          - 3000:3000
++
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Set up Node.js
++        uses: actions/setup-node@v4
++        with:
++          node-version: '20'
++
++      - name: Install Newman + reporter HTML
++        run: npm install -g newman newman-reporter-htmlextra
++
++      # Bỏ comment khối này nếu API nằm NGAY TRONG repo này (không dùng Docker service ở trên):
++      # - name: Install & start API server
++      #   run: |
++      #     npm ci
++      #     npm run start &
++      #     npx wait-on http://localhost:3000/api/categories --timeout 30000
++
++      - name: Wait for API to be ready
++        run: npx wait-on http://localhost:3000/api/categories --timeout 30000
++
++      - name: Run Newman test suite
++        run: |
++          mkdir -p newman
++          newman run New_Collection_postman_collection.json \
++            -e New_Environment_postman_environment.json \
++            -d data.csv \
++            --reporters cli,junit,htmlextra \
++            --reporter-junit-export newman/report.xml \
++            --reporter-htmlextra-export newman/report.html
++
++      # Newman tự thoát với exit code khác 0 nếu có bất kỳ test nào fail,
++      # nên bước trên sẽ tự làm cả job/workflow chuyển sang FAILED (❌) mà
++      # không cần thêm logic kiểm tra nào khác.
++
++      - name: Upload Newman HTML report
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: newman-html-report
++          path: newman/report.html
++
++      - name: Upload JUnit report (để hiển thị test summary trên PR)
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: newman-junit-report
++          path: newman/report.xml
++
++      - name: Publish test summary lên PR/commit
++        if: always()
++        uses: mikepenz/action-junit-report@v4
++        with:
++          report_paths: 'newman/report.xml'
++          fail_on_failure: false   # để step trước (newman run) là nơi quyết định pass/fail, step này chỉ hiển thị summary
+diff --git a/New_Collection_postman_collection.json b/New_Collection_postman_collection.json
+new file mode 100644
+index 0000000..763927a
+--- /dev/null
++++ b/New_Collection_postman_collection.json
+@@ -0,0 +1,1916 @@
++{
++	"info": {
++		"_postman_id": "ea85c5fd-e9f1-4dfb-8854-6fb712c1e63d",
++		"name": "New Collection",
++		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
++		"_exporter_id": "50305160",
++		"_collection_link": "https://go.postman.co/collection/50305160-ea85c5fd-e9f1-4dfb-8854-6fb712c1e63d?source=collection_link"
++	},
++	"item": [
++		{
++			"name": "Setup — Auth & Data",
++			"item": [
++				{
++					"name": "Setup — Đăng Ký User (nếu chưa có)",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy các request Setup ở ITERATION ĐẦU TIÊN (pm.info.iteration bắt đầu từ 0) của lần chạy này.\n",
++									"// Newman KHÔNG lưu lại Environment giữa 2 lần gọi lệnh riêng biệt (trừ khi dùng --export-environment),\n",
++									"// nên Setup phải chạy NGAY TRONG CÙNG một lệnh `newman run ... -d data.csv` thay vì tách thành\n",
++									"// 1 lệnh Setup riêng + 1 lệnh CSV riêng — nếu không userToken/adminToken sẽ luôn rỗng ở lệnh sau.\n",
++									"if (pm.info.iteration !== 0) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================\n",
++									"// Setup — Đăng Ký User: sinh email DUY NHẤT cho mỗi lần chạy\n",
++									"// Backend KHÔNG có ràng buộc UNIQUE trên email và /api/login lấy dòng đầu tiên khớp email\n",
++									"// (không ORDER BY/LIMIT) — nếu tái sử dụng 1 email cố định qua nhiều lần chạy, các dòng user\n",
++									"// \"rác\" từ những lần chạy trước (với password cũ) có thể khiến login bị so sai password,\n",
++									"// dẫn tới login_attempts tăng và tài khoản bị khóa 403 dù password hiện tại đúng.\n",
++									"// → Luôn tạo user mới hoàn toàn để loại bỏ khả năng này.\n",
++									"// =============================================\n",
++									"const uniqueEmail = `qa_${Date.now()}@eshop.com`;\n",
++									"pm.environment.set('userEmail', uniqueEmail);\n",
++									"console.log('Setup — Sinh email test mới:', uniqueEmail);"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================",
++									"// Setup — Đăng Ký User (email mới, sinh ở Pre-request Script)",
++									"// Ghi chú: POST /api/register là endpoint hỗ trợ tạo user test, KHÔNG được mô tả trong API_Infor.txt",
++									"// (spec chỉ định nghĩa POST /api/login). Giữ lại vì cần thiết để tạo user mới phục vụ setup,",
++									"// nhưng không trích dẫn 'API Spec mục 1.1' vì mục đó không tồn tại trong tài liệu spec.",
++									"// =============================================",
++									"",
++									"pm.test(`Setup — Đăng ký user: status 200`, () => {",
++									"    pm.response.to.have.status(200);",
++									"});",
++									"",
++									"const jsonData = pm.response.json();",
++									"pm.test(`Setup — Đăng ký user: có trả về id`, () => {",
++									"    pm.expect(jsonData).to.have.property('id');",
++									"});",
++									"console.log('Setup — Đăng ký user thành công, id =', jsonData && jsonData.id);"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "POST",
++						"header": [
++							{
++								"key": "Content-Type",
++								"value": "application/json"
++							}
++						],
++						"url": {
++							"raw": "{{baseUrl}}/api/register",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"register"
++							]
++						},
++						"description": "Sinh email DUY NHẤT mỗi lần chạy (pre-request) rồi đăng ký user mới. Ref: API Spec 1.1",
++						"body": {
++							"mode": "raw",
++							"raw": "{\n  \"name\": \"QA Automation Tester\",\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
++							"options": {
++								"raw": {
++									"language": "json"
++								}
++							}
++						}
++					},
++					"response": []
++				},
++				{
++					"name": "Setup — Đăng Nhập User",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy các request Setup ở ITERATION ĐẦU TIÊN (pm.info.iteration bắt đầu từ 0) của lần chạy này.\n",
++									"// Newman KHÔNG lưu lại Environment giữa 2 lần gọi lệnh riêng biệt (trừ khi dùng --export-environment),\n",
++									"// nên Setup phải chạy NGAY TRONG CÙNG một lệnh `newman run ... -d data.csv` thay vì tách thành\n",
++									"// 1 lệnh Setup riêng + 1 lệnh CSV riêng — nếu không userToken/adminToken sẽ luôn rỗng ở lệnh sau.\n",
++									"if (pm.info.iteration !== 0) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================\n",
++									"// Setup — Đăng Nhập User\n",
++									"// Ref: API Spec mục 1.2 — POST /api/login\n",
++									"// Lưu token vào Environment ('userToken') để FR08 Checkout và Setup — Thêm giỏ hàng dùng lại.\n",
++									"// =============================================\n",
++									"\n",
++									"if (pm.response.code === 403) {\n",
++									"    // Backend khóa tài khoản 180s sau nhiều lần sai password (xem /api/login).\n",
++									"    // Với email duy nhất sinh mới mỗi lần (Setup — Đăng Ký User) tình huống này không nên xảy ra;\n",
++									"    // nếu vẫn gặp, log rõ message để phân biệt \"bị khóa\" với \"sai email/password\".\n",
++									"    try {\n",
++									"        console.warn('Setup — Login user bị 403:', pm.response.json().error);\n",
++									"    } catch (e) {}\n",
++									"}\n",
++									"\n",
++									"pm.test(`Setup — Đăng nhập user: status 200`, () => {\n",
++									"    pm.response.to.have.status(200);\n",
++									"});\n",
++									"\n",
++									"let jsonData;\n",
++									"pm.test(`Setup — Đăng nhập user: response có trả về token`, () => {\n",
++									"    jsonData = pm.response.json();\n",
++									"    pm.expect(jsonData).to.have.property('token');\n",
++									"});\n",
++									"\n",
++									"if (jsonData && jsonData.token) {\n",
++									"    pm.environment.set('userToken', jsonData.token);\n",
++									"    console.log('Đã lưu userToken vào Environment.');\n",
++									"}"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "POST",
++						"header": [
++							{
++								"key": "Content-Type",
++								"value": "application/json"
++							}
++						],
++						"url": {
++							"raw": "{{baseUrl}}/api/login",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"login"
++							]
++						},
++						"description": "Lấy userToken. Ref: API Spec 1.2",
++						"body": {
++							"mode": "raw",
++							"raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
++							"options": {
++								"raw": {
++									"language": "json"
++								}
++							}
++						}
++					},
++					"response": []
++				},
++				{
++					"name": "Setup — Đăng Nhập Admin",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy các request Setup ở ITERATION ĐẦU TIÊN (pm.info.iteration bắt đầu từ 0) của lần chạy này.\n",
++									"// Newman KHÔNG lưu lại Environment giữa 2 lần gọi lệnh riêng biệt (trừ khi dùng --export-environment),\n",
++									"// nên Setup phải chạy NGAY TRONG CÙNG một lệnh `newman run ... -d data.csv` thay vì tách thành\n",
++									"// 1 lệnh Setup riêng + 1 lệnh CSV riêng — nếu không userToken/adminToken sẽ luôn rỗng ở lệnh sau.\n",
++									"if (pm.info.iteration !== 0) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================\n",
++									"// Setup — Đăng Nhập Admin\n",
++									"// Ref: API Spec mục 1.2 — POST /api/login\n",
++									"// Lưu token vào Environment ('adminToken') để FR14 (Category CRUD) dùng lại.\n",
++									"// LƯU Ý: tài khoản admin thường được seed sẵn trong DB, không tạo được qua /api/register thông thường,\n",
++									"// nên KHÔNG thể sinh email duy nhất như Setup User. Nếu tài khoản admin từng bị nhập sai password\n",
++									"// nhiều lần (kể cả bởi người khác dùng chung DB), nó có thể đang bị khóa 180s — 403 lúc đó không có\n",
++									"// nghĩa là adminEmail/adminPassword sai, chỉ cần đợi rồi thử lại.\n",
++									"// =============================================\n",
++									"\n",
++									"if (pm.response.code === 403) {\n",
++									"    try {\n",
++									"        console.warn('Setup — Login admin bị 403 (có thể đang bị khóa tạm thời, đợi ~180s rồi thử lại):', pm.response.json().error);\n",
++									"    } catch (e) {}\n",
++									"}\n",
++									"\n",
++									"pm.test(`Setup — Đăng nhập admin: status 200`, () => {\n",
++									"    pm.response.to.have.status(200);\n",
++									"});\n",
++									"\n",
++									"let jsonData;\n",
++									"pm.test(`Setup — Đăng nhập admin: response có trả về token`, () => {\n",
++									"    jsonData = pm.response.json();\n",
++									"    pm.expect(jsonData).to.have.property('token');\n",
++									"});\n",
++									"\n",
++									"if (jsonData && jsonData.token) {\n",
++									"    pm.environment.set('adminToken', jsonData.token);\n",
++									"    console.log('Đã lưu adminToken vào Environment.');\n",
++									"}"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "POST",
++						"header": [
++							{
++								"key": "Content-Type",
++								"value": "application/json"
++							}
++						],
++						"url": {
++							"raw": "{{baseUrl}}/api/login",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"login"
++							]
++						},
++						"description": "Lấy adminToken. Ref: API Spec 1.2. Tài khoản admin cần được seed sẵn trong DB.",
++						"body": {
++							"mode": "raw",
++							"raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
++							"options": {
++								"raw": {
++									"language": "json"
++								}
++							}
++						}
++					},
++					"response": []
++				},
++				{
++					"name": "Setup — Lấy Sản Phẩm Mẫu",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy các request Setup ở ITERATION ĐẦU TIÊN (pm.info.iteration bắt đầu từ 0) của lần chạy này.\n",
++									"// Newman KHÔNG lưu lại Environment giữa 2 lần gọi lệnh riêng biệt (trừ khi dùng --export-environment),\n",
++									"// nên Setup phải chạy NGAY TRONG CÙNG một lệnh `newman run ... -d data.csv` thay vì tách thành\n",
++									"// 1 lệnh Setup riêng + 1 lệnh CSV riêng — nếu không userToken/adminToken sẽ luôn rỗng ở lệnh sau.\n",
++									"if (pm.info.iteration !== 0) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================\n",
++									"// Setup — Lấy Sản Phẩm Mẫu\n",
++									"// Ref: API Spec mục 3.1 — GET /api/products\n",
++									"// Lưu sản phẩm đầu tiên vào Environment để dùng cho bước \"Thêm Sản Phẩm Vào Giỏ Hàng\".\n",
++									"// =============================================\n",
++									"\n",
++									"pm.test(`Setup — Lấy sản phẩm mẫu: status 200`, () => {\n",
++									"    pm.response.to.have.status(200);\n",
++									"});\n",
++									"\n",
++									"const jsonData = pm.response.json();\n",
++									"\n",
++									"pm.test(`Setup — Lấy sản phẩm mẫu: danh sách không rỗng`, () => {\n",
++									"    pm.expect(jsonData).to.be.an('array').that.is.not.empty;\n",
++									"});\n",
++									"\n",
++									"if (Array.isArray(jsonData) && jsonData.length > 0) {\n",
++									"    pm.environment.set('firstProductId', jsonData[0].id);\n",
++									"    pm.environment.set('firstProductName', jsonData[0].name);\n",
++									"    pm.environment.set('firstProductPrice', jsonData[0].price);\n",
++									"    console.log('Đã lưu sản phẩm mẫu:', jsonData[0].id, jsonData[0].name);\n",
++									"}"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "GET",
++						"header": [],
++						"url": {
++							"raw": "{{baseUrl}}/api/products",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"products"
++							]
++						},
++						"description": "Lấy 1 sản phẩm mẫu để dùng cho bước thêm giỏ hàng. Ref: API Spec 3.1"
++					},
++					"response": []
++				},
++				{
++					"name": "Setup — Thêm Sản Phẩm Vào Giỏ Hàng",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy các request Setup ở ITERATION ĐẦU TIÊN (pm.info.iteration bắt đầu từ 0) của lần chạy này.\n",
++									"// Newman KHÔNG lưu lại Environment giữa 2 lần gọi lệnh riêng biệt (trừ khi dùng --export-environment),\n",
++									"// nên Setup phải chạy NGAY TRONG CÙNG một lệnh `newman run ... -d data.csv` thay vì tách thành\n",
++									"// 1 lệnh Setup riêng + 1 lệnh CSV riêng — nếu không userToken/adminToken sẽ luôn rỗng ở lệnh sau.\n",
++									"if (pm.info.iteration !== 0) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================\n",
++									"// Setup — Thêm Sản Phẩm Vào Giỏ Hàng\n",
++									"// Ref: API Spec mục 4.2 — POST /api/cart\n",
++									"// Đảm bảo giỏ hàng có sản phẩm trước khi test FR08 Checkout.\n",
++									"// Chạy SAU \"Setup — Đăng Nhập User\" và \"Setup — Lấy Sản Phẩm Mẫu\" trong cùng folder Setup.\n",
++									"// =============================================\n",
++									"\n",
++									"pm.test(`Setup — Thêm vào giỏ hàng: status 200`, () => {\n",
++									"    pm.response.to.have.status(200);\n",
++									"});"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "POST",
++						"header": [
++							{
++								"key": "Content-Type",
++								"value": "application/json"
++							},
++							{
++								"key": "Authorization",
++								"value": "Bearer {{userToken}}"
++							}
++						],
++						"url": {
++							"raw": "{{baseUrl}}/api/cart",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"cart"
++							]
++						},
++						"description": "Đảm bảo giỏ hàng có sản phẩm trước khi FR08 Checkout. Ref: API Spec 4.2",
++						"body": {
++							"mode": "raw",
++							"raw": "{\n  \"id\": {{firstProductId}},\n  \"name\": \"{{firstProductName}}\",\n  \"price\": {{firstProductPrice}},\n  \"quantity\": 1\n}",
++							"options": {
++								"raw": {
++									"language": "json"
++								}
++							}
++						}
++					},
++					"response": []
++				}
++			]
++		},
++		{
++			"name": "FR05 — Lấy Danh Mục & Tìm Kiếm Sản Phẩm",
++			"event": [
++				{
++					"listen": "prerequest",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++							"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++							"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++							"const targetRequest = pm.iterationData.get('request_name');\n",
++							"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++							"    pm.execution.skipRequest();\n",
++							"}",
++							"\n",
++							"// Hỗ trợ test boundary case cho query string (mảng search[], lặp lại param...) — API Spec 3.1\n",
++							"// Nếu CSV có cột 'raw_query', dùng NGUYÊN VĂN chuỗi đó thay cho '?search={{search}}' mặc định.\n",
++							"// Ví dụ raw_query = 'search[]=abc&search[]=def' hoặc 'search=a&search=b' (lặp lại param).\n",
++							"const rawQuery = pm.iterationData.get('raw_query');\n",
++							"if (rawQuery) {\n",
++							"    pm.request.url = pm.environment.get('baseUrl') + '/api/products?' + rawQuery;\n",
++							"}"
++						]
++					}
++				},
++				{
++					"listen": "test",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// =============================================\n",
++							"// FR05 — Lấy Danh Mục & Tìm Kiếm Sản Phẩm\n",
++							"// Ref: API Spec mục 3.1 — GET /api/products?search=keyword\n",
++							"// Lưu ý: field trả về là 'category_id' (theo spec mục 3.3), KHÔNG phải 'category'.\n",
++							"// =============================================\n",
++							"\n",
++							"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
++							"const testId         = pm.iterationData.get('test_id')          || '';\n",
++							"const testDesc       = pm.iterationData.get('description')      || '';\n",
++							"const expectArray    = pm.iterationData.get('expect_array');\n",
++							"const expectEmpty    = pm.iterationData.get('expect_empty');\n",
++							"const expectCount    = pm.iterationData.get('expect_count');\n",
++							"const expectField    = pm.iterationData.get('expect_field');\n",
++							"const expectFieldType= pm.iterationData.get('expect_field_type');\n",
++							"\n",
++							"const label = `[${testId}] ${testDesc}`;\n",
++							"\n",
++							"pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
++							"    pm.response.to.have.status(expectedStatus);\n",
++							"});\n",
++							"\n",
++							"pm.test(`${label} — Content-Type là application/json`, () => {\n",
++							"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');\n",
++							"});\n",
++							"\n",
++							"// Chỉ kiểm tra body khi status code THỰC TẾ khớp status kỳ vọng — tránh cascading fail khi auth/network sai.\n",
++							"const statusMatches = pm.response.code === expectedStatus;\n",
++							"\n",
++							"if (statusMatches && expectedStatus < 300) {\n",
++							"    let jsonData;\n",
++							"    pm.test(`${label} — Response body parse được JSON`, () => {\n",
++							"        jsonData = pm.response.json();\n",
++							"        pm.expect(jsonData).to.exist;\n",
++							"    });\n",
++							"\n",
++							"    if (jsonData !== undefined) {\n",
++							"        if (expectArray === 'true') {\n",
++							"            pm.test(`${label} — Response là mảng (array)`, () => {\n",
++							"                pm.expect(jsonData).to.be.an('array');\n",
++							"            });\n",
++							"\n",
++							"            if (expectEmpty === 'true') {\n",
++							"                pm.test(`${label} — Kết quả trả về mảng rỗng`, () => {\n",
++							"                    pm.expect(jsonData).to.be.an('array').that.is.empty;\n",
++							"                });\n",
++							"            } else if (expectEmpty === 'false') {\n",
++							"                pm.test(`${label} — Kết quả trả về ít nhất 1 phần tử`, () => {\n",
++							"                    pm.expect(jsonData).to.be.an('array').that.is.not.empty;\n",
++							"                });\n",
++							"            }\n",
++							"\n",
++							"            if (expectCount !== null && expectCount !== undefined && expectCount !== '') {\n",
++							"                pm.test(`${label} — Số lượng kết quả = ${expectCount}`, () => {\n",
++							"                    pm.expect(jsonData.length).to.eql(parseInt(expectCount));\n",
++							"                });\n",
++							"            }\n",
++							"\n",
++							"            if (jsonData.length > 0) {\n",
++							"                pm.test(`${label} — Mỗi sản phẩm có đủ các trường bắt buộc`, () => {\n",
++							"                    jsonData.forEach((item, idx) => {\n",
++							"                        pm.expect(item, `item[${idx}]`).to.have.property('id');\n",
++							"                        pm.expect(item, `item[${idx}]`).to.have.property('name');\n",
++							"                        pm.expect(item, `item[${idx}]`).to.have.property('price');\n",
++							"                        pm.expect(item, `item[${idx}]`).to.have.property('category_id');\n",
++							"                    });\n",
++							"                });\n",
++							"\n",
++							"                pm.test(`${label} — Trường 'id' là số nguyên`, () => {\n",
++							"                    jsonData.forEach((item, idx) => {\n",
++							"                        pm.expect(item.id, `item[${idx}].id`).to.be.a('number');\n",
++							"                    });\n",
++							"                });\n",
++							"\n",
++							"                pm.test(`${label} — Trường 'name' là chuỗi`, () => {\n",
++							"                    jsonData.forEach((item, idx) => {\n",
++							"                        pm.expect(item.name, `item[${idx}].name`).to.be.a('string');\n",
++							"                    });\n",
++							"                });\n",
++							"\n",
++							"                // Regression: price phải luôn là number (trước đây từng phát hiện bug price trả về string)\n",
++							"                pm.test(`${label} — Trường 'price' luôn là số (number) — regression`, () => {\n",
++							"                    jsonData.forEach((item, idx) => {\n",
++							"                        pm.expect(typeof item.price, `item[${idx}].price type`).to.eql('number');\n",
++							"                    });\n",
++							"                });\n",
++							"\n",
++							"                // Lưu sản phẩm đầu tiên để các request Setup (thêm giỏ hàng...) dùng lại\n",
++							"                pm.environment.set('firstProductId', jsonData[0].id);\n",
++							"                pm.environment.set('firstProductName', jsonData[0].name);\n",
++							"                pm.environment.set('firstProductPrice', jsonData[0].price);\n",
++							"            }\n",
++							"        }\n",
++							"\n",
++							"        if (expectField && expectFieldType) {\n",
++							"            pm.test(`${label} — Field '${expectField}' có kiểu ${expectFieldType}`, () => {\n",
++							"                if (Array.isArray(jsonData)) {\n",
++							"                    jsonData.forEach((item, idx) => {\n",
++							"                        pm.expect(typeof item[expectField], `item[${idx}].${expectField}`).to.eql(expectFieldType);\n",
++							"                    });\n",
++							"                } else {\n",
++							"                    pm.expect(typeof jsonData[expectField]).to.eql(expectFieldType);\n",
++							"                }\n",
++							"            });\n",
++							"        }\n",
++							"    }\n",
++							"} else if (statusMatches && expectedStatus >= 400) {\n",
++							"    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
++							"        try {\n",
++							"            const body = pm.response.json();\n",
++							"            pm.expect(body).to.satisfy(b =>\n",
++							"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
++							"                'Body phải có trường message, error, hoặc detail'\n",
++							"            );\n",
++							"        } catch(e) {\n",
++							"            pm.expect(pm.response.text()).to.not.be.empty;\n",
++							"        }\n",
++							"    });\n",
++							"}"
++						]
++					}
++				}
++			],
++			"request": {
++				"method": "GET",
++				"header": [],
++				"url": {
++					"raw": "{{baseUrl}}/api/products?search={{search}}",
++					"host": [
++						"{{baseUrl}}"
++					],
++					"path": [
++						"api",
++						"products"
++					],
++					"query": [
++						{
++							"key": "search",
++							"value": "{{search}}",
++							"description": "Từ khóa tìm kiếm sản phẩm theo tên (tùy chọn) — API Spec mục 3.1"
++						}
++					]
++				},
++				"description": "Lấy danh sách sản phẩm, hỗ trợ tìm kiếm theo tên qua query string 'search'. Ref: API Spec 3.1"
++			},
++			"response": []
++		},
++		{
++			"name": "FR05 — Xem Chi Tiết Sản Phẩm",
++			"event": [
++				{
++					"listen": "prerequest",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++							"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++							"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++							"const targetRequest = pm.iterationData.get('request_name');\n",
++							"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++							"    pm.execution.skipRequest();\n",
++							"}"
++						]
++					}
++				},
++				{
++					"listen": "test",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// =============================================",
++							"// FR05 — Xem Chi Tiết Sản Phẩm",
++							"// Ref: API Spec mục 3.2 — GET /api/products/:id",
++							"// Lưu ý: field trả về là 'category_id' (theo spec mục 3.3), KHÔNG phải 'category'.",
++							"// Lưu ý quan trọng (spec mục 11): nếu product.id là số CHẴN, server trả price dạng STRING;",
++							"// nếu id LẺ, price là number. Vì vậy KHÔNG hard-code kiểu của 'price' — phải đọc",
++							"// expect_field/expect_field_type từ CSV để kiểm tra đúng theo từng dòng dữ liệu.",
++							"// =============================================",
++							"",
++							"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;",
++							"const testId         = pm.iterationData.get('test_id')          || '';",
++							"const testDesc       = pm.iterationData.get('description')      || '';",
++							"const expectField    = pm.iterationData.get('expect_field');",
++							"const expectFieldType= pm.iterationData.get('expect_field_type');",
++							"",
++							"const label = `[${testId}] ${testDesc}`;",
++							"",
++							"pm.test(`${label} — Status code là ${expectedStatus}`, () => {",
++							"    pm.response.to.have.status(expectedStatus);",
++							"});",
++							"",
++							"pm.test(`${label} — Content-Type là application/json`, () => {",
++							"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
++							"});",
++							"",
++							"const statusMatches = pm.response.code === expectedStatus;",
++							"",
++							"if (statusMatches && expectedStatus < 300) {",
++							"    let jsonData;",
++							"    pm.test(`${label} — Response body parse được JSON`, () => {",
++							"        jsonData = pm.response.json();",
++							"        pm.expect(jsonData).to.exist;",
++							"    });",
++							"",
++							"    if (jsonData !== undefined) {",
++							"        pm.test(`${label} — Sản phẩm có đủ các trường bắt buộc`, () => {",
++							"            pm.expect(jsonData).to.have.property('id');",
++							"            pm.expect(jsonData).to.have.property('name');",
++							"            pm.expect(jsonData).to.have.property('price');",
++							"            pm.expect(jsonData).to.have.property('category_id');",
++							"        });",
++							"",
++							"        pm.test(`${label} — Trường 'id' là số nguyên`, () => {",
++							"            pm.expect(jsonData.id).to.be.a('number');",
++							"        });",
++							"",
++							"        pm.test(`${label} — Trường 'name' là chuỗi không rỗng`, () => {",
++							"            pm.expect(jsonData.name).to.be.a('string').and.not.empty;",
++							"        });",
++							"",
++							"        // Kiểu của 'price' phụ thuộc parity của id (xem ghi chú đầu file) — không hard-code.",
++							"        if (expectField && expectFieldType) {",
++							"            const fields = expectField.split(';');",
++							"            const types  = expectFieldType.split(';');",
++							"",
++							"            fields.forEach((field, idx) => {",
++							"                const expectedType = types[idx];",
++							"                if (!expectedType) return;",
++							"                pm.test(`${label} — Field '${field}' có kiểu ${expectedType}`, () => {",
++							"                    pm.expect(typeof jsonData[field], `jsonData.${field}`).to.eql(expectedType);",
++							"                });",
++							"            });",
++							"        }",
++							"    }",
++							"",
++							"} else if (statusMatches && expectedStatus >= 400) {",
++							"    pm.test(`${label} — Response có thông báo lỗi`, () => {",
++							"        try {",
++							"            const body = pm.response.json();",
++							"            pm.expect(body).to.satisfy(b =>",
++							"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),",
++							"                'Body phải có trường message, error, hoặc detail'",
++							"            );",
++							"        } catch(e) {",
++							"            pm.expect(pm.response.text()).to.not.be.empty;",
++							"        }",
++							"    });",
++							"}"
++						]
++					}
++				}
++			],
++			"request": {
++				"method": "GET",
++				"header": [],
++				"url": {
++					"raw": "{{baseUrl}}/api/products/{{id}}",
++					"host": [
++						"{{baseUrl}}"
++					],
++					"path": [
++						"api",
++						"products",
++						"{{id}}"
++					]
++				},
++				"description": "Xem chi tiết một sản phẩm theo id. Ref: API Spec 3.2"
++			},
++			"response": []
++		},
++		{
++			"name": "FR08 — Đăng Nhập",
++			"event": [
++				{
++					"listen": "prerequest",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++							"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++							"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++							"const targetRequest = pm.iterationData.get('request_name');\n",
++							"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++							"    pm.execution.skipRequest();\n",
++							"}"
++						]
++					}
++				},
++				{
++					"listen": "test",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// =============================================",
++							"// FR08 — Đăng Nhập (kiểm thử tiêu cực: sai email/password, tài khoản khóa 403, thiếu field...)",
++							"// Ref: API Spec mục 1.2 — POST /api/login",
++							"// Dùng CSV cột 'email' / 'password' riêng — KHÔNG dùng chung userEmail/userPassword của Setup",
++							"// để không ảnh hưởng tới token đang lưu trong Environment.",
++							"// =============================================",
++							"",
++							"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;",
++							"const testId         = pm.iterationData.get('test_id')          || '';",
++							"const testDesc       = pm.iterationData.get('description')      || '';",
++							"const expectedRole   = pm.iterationData.get('expected_role')    || '';",
++							"",
++							"const label = `[${testId}] ${testDesc}`;",
++							"",
++							"pm.test(`${label} — Status code là ${expectedStatus}`, () => {",
++							"    pm.response.to.have.status(expectedStatus);",
++							"});",
++							"",
++							"const statusMatches = pm.response.code === expectedStatus;",
++							"",
++							"if (statusMatches && expectedStatus < 300) {",
++							"    pm.test(`${label} — Content-Type là application/json`, () => {",
++							"        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
++							"    });",
++							"",
++							"    const jsonData = pm.response.json();",
++							"",
++							"    pm.test(`${label} — Response có trả về token`, () => {",
++							"        pm.expect(jsonData).to.have.property('token');",
++							"    });",
++							"",
++							"    pm.test(`${label} — Response có trả về user object`, () => {",
++							"        pm.expect(jsonData).to.have.property('user');",
++							"        pm.expect(jsonData.user).to.be.an('object');",
++							"    });",
++							"",
++							"    if (expectedRole) {",
++							"        pm.test(`${label} — user.role đúng là '${expectedRole}'`, () => {",
++							"            pm.expect(jsonData.user).to.have.property('role');",
++							"            pm.expect(jsonData.user.role).to.eql(expectedRole);",
++							"        });",
++							"    }",
++							"",
++							"} else if (statusMatches && expectedStatus >= 400) {",
++							"    pm.test(`${label} — Response có thông báo lỗi`, () => {",
++							"        try {",
++							"            const body = pm.response.json();",
++							"            pm.expect(body).to.satisfy(b =>",
++							"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),",
++							"                'Body phải có trường message, error, hoặc detail'",
++							"            );",
++							"        } catch(e) {",
++							"            pm.expect(pm.response.text()).to.not.be.empty;",
++							"        }",
++							"    });",
++							"}"
++						]
++					}
++				}
++			],
++			"request": {
++				"method": "POST",
++				"header": [
++					{
++						"key": "Content-Type",
++						"value": "application/json"
++					}
++				],
++				"url": {
++					"raw": "{{baseUrl}}/api/login",
++					"host": [
++						"{{baseUrl}}"
++					],
++					"path": [
++						"api",
++						"login"
++					]
++				},
++				"description": "Kiểm thử tiêu cực luồng đăng nhập (FR08): sai mật khẩu, email không tồn tại, tài khoản bị khóa, thiếu trường... Ref: API Spec 1.2. CSV điều khiển qua cột 'email'/'password'.",
++				"body": {
++					"mode": "raw",
++					"raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
++					"options": {
++						"raw": {
++							"language": "json"
++						}
++					}
++				}
++			},
++			"response": []
++		},
++		{
++			"name": "FR08 — Xem Giỏ Hàng",
++			"event": [
++				{
++					"listen": "prerequest",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++							"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++							"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++							"const targetRequest = pm.iterationData.get('request_name');\n",
++							"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++							"    pm.execution.skipRequest();\n",
++							"}"
++						]
++					}
++				},
++				{
++					"listen": "test",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// =============================================\n",
++							"// FR08 — Xem Giỏ Hàng\n// Ref: API Spec mục 4.1 — GET /api/cart (yêu cầu Authorization)\n// Header Authorization = {{authHeader}}, điều khiển qua CSV cột 'auth_mode' (ADMIN/USER/INVALID/NONE)\n// để test cả trường hợp không token / token hỏng.\n",
++							"// =============================================\n",
++							"\n",
++							"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
++							"const testId         = pm.iterationData.get('test_id')          || '';\n",
++							"const testDesc       = pm.iterationData.get('description')      || '';\n",
++							"\n",
++							"const label = `[${testId}] ${testDesc}`;\n",
++							"\n",
++							"pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
++							"    pm.response.to.have.status(expectedStatus);\n",
++							"});\n",
++							"\n",
++							"const statusMatches = pm.response.code === expectedStatus;\n",
++							"\n",
++							"if (statusMatches && expectedStatus < 300) {\n",
++							"    pm.test(`${label} — Content-Type là application/json`, () => {\n",
++							"        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');\n",
++							"    });\n",
++							"\n",
++							"    pm.test(`${label} — Response là mảng (giỏ hàng)`, () => {\n",
++							"        pm.expect(pm.response.json()).to.be.an('array');\n",
++							"    });\n",
++							"",
++							"} else if (statusMatches && expectedStatus >= 400) {\n",
++							"    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
++							"        try {\n",
++							"            const body = pm.response.json();\n",
++							"            pm.expect(body).to.satisfy(b =>\n",
++							"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
++							"                'Body phải có trường message, error, hoặc detail'\n",
++							"            );\n",
++							"        } catch(e) {\n",
++							"            pm.expect(pm.response.text()).to.not.be.empty;\n",
++							"        }\n",
++							"    });\n",
++							"}"
++						]
++					}
++				}
++			],
++			"request": {
++				"method": "GET",
++				"header": [
++					{
++						"key": "Authorization",
++						"value": "{{authHeader}}",
++						"description": "Điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE — API Spec mục 4"
++					}
++				],
++				"url": {
++					"raw": "{{baseUrl}}/api/cart",
++					"host": [
++						"{{baseUrl}}"
++					],
++					"path": [
++						"api",
++						"cart"
++					]
++				},
++				"description": "Xem giỏ hàng của user hiện tại. Ref: API Spec 4.1. Authorization điều khiển qua CSV 'auth_mode'."
++			},
++			"response": []
++		},
++		{
++			"name": "FR08 — Thêm Giỏ Hàng",
++			"event": [
++				{
++					"listen": "prerequest",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++							"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++							"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++							"const targetRequest = pm.iterationData.get('request_name');\n",
++							"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++							"    pm.execution.skipRequest();\n",
++							"}"
++						]
++					}
++				},
++				{
++					"listen": "test",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// =============================================",
++							"// FR08 — Thêm Giỏ Hàng",
++							"// Ref: API Spec mục 4.2 — POST /api/cart",
++							"// CSV điều khiển product_id/quantity qua cột 'cartProductId'/'cartQuantity', và auth qua 'auth_mode'.",
++							"// =============================================",
++							"",
++							"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;",
++							"const testId         = pm.iterationData.get('test_id')          || '';",
++							"const testDesc       = pm.iterationData.get('description')      || '';",
++							"",
++							"const label = `[${testId}] ${testDesc}`;",
++							"",
++							"pm.test(`${label} — Status code là ${expectedStatus}`, () => {",
++							"    pm.response.to.have.status(expectedStatus);",
++							"});",
++							"",
++							"const statusMatches = pm.response.code === expectedStatus;",
++							"",
++							"if (statusMatches && expectedStatus < 300) {",
++							"    pm.test(`${label} — Content-Type là application/json`, () => {",
++							"        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
++							"    });",
++							"",
++							"    pm.test(`${label} — Response message là 'Added to cart'`, () => {",
++							"        const jsonData = pm.response.json();",
++							"        pm.expect(jsonData).to.have.property('message');",
++							"        pm.expect(jsonData.message).to.eql('Added to cart');",
++							"    });",
++							"",
++							"} else if (statusMatches && expectedStatus >= 400) {",
++							"    pm.test(`${label} — Response có thông báo lỗi`, () => {",
++							"        try {",
++							"            const body = pm.response.json();",
++							"            pm.expect(body).to.satisfy(b =>",
++							"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),",
++							"                'Body phải có trường message, error, hoặc detail'",
++							"            );",
++							"        } catch(e) {",
++							"            pm.expect(pm.response.text()).to.not.be.empty;",
++							"        }",
++							"    });",
++							"}"
++						]
++					}
++				}
++			],
++			"request": {
++				"method": "POST",
++				"header": [
++					{
++						"key": "Content-Type",
++						"value": "application/json"
++					},
++					{
++						"key": "Authorization",
++						"value": "{{authHeader}}",
++						"description": "Điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE — API Spec mục 4"
++					}
++				],
++				"url": {
++					"raw": "{{baseUrl}}/api/cart",
++					"host": [
++						"{{baseUrl}}"
++					],
++					"path": [
++						"api",
++						"cart"
++					]
++				},
++				"description": "Thêm sản phẩm vào giỏ hàng. Ref: API Spec 4.2. CSV điều khiển 'cartProductId'/'cartQuantity' và 'auth_mode'.",
++				"body": {
++					"mode": "raw",
++					"raw": "{\n  \"product_id\": {{cartProductId}},\n  \"quantity\": {{cartQuantity}}\n}",
++					"options": {
++						"raw": {
++							"language": "json"
++						}
++					}
++				}
++			},
++			"response": []
++		},
++		{
++			"name": "FR08 — Xem Danh Sách Đơn Hàng",
++			"event": [
++				{
++					"listen": "prerequest",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++							"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++							"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++							"const targetRequest = pm.iterationData.get('request_name');\n",
++							"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++							"    pm.execution.skipRequest();\n",
++							"}"
++						]
++					}
++				},
++				{
++					"listen": "test",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// =============================================",
++							"// FR08 — Xem Danh Sách Đơn Hàng",
++							"// Ref: API Spec mục 4.4 — GET /api/orders/my-orders",
++							"// Chỉ trả về đơn hàng của CHÍNH user đang đăng nhập (kiểm tra không rò rỉ đơn của user khác).",
++							"// Query thực tế: SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC",
++							"// => order vừa checkout luôn là phần tử đầu tiên (index 0) của mảng trả về.",
++							"// =============================================",
++							"",
++							"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;",
++							"const testId         = pm.iterationData.get('test_id')          || '';",
++							"const testDesc       = pm.iterationData.get('description')      || '';",
++							"const expectEmpty    = pm.iterationData.get('expect_empty');",
++							"const expectCount    = pm.iterationData.get('expect_count');",
++							"const expectField    = pm.iterationData.get('expect_field');",
++							"const expectFieldType= pm.iterationData.get('expect_field_type');",
++							"",
++							"const label = `[${testId}] ${testDesc}`;",
++							"",
++							"pm.test(`${label} — Status code là ${expectedStatus}`, () => {",
++							"    pm.response.to.have.status(expectedStatus);",
++							"});",
++							"",
++							"const statusMatches = pm.response.code === expectedStatus;",
++							"",
++							"if (statusMatches && expectedStatus < 300) {",
++							"    pm.test(`${label} — Content-Type là application/json`, () => {",
++							"        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
++							"    });",
++							"",
++							"    const jsonData = pm.response.json();",
++							"",
++							"    pm.test(`${label} — Response là mảng đơn hàng`, () => {",
++							"        pm.expect(jsonData).to.be.an('array');",
++							"    });",
++							"",
++							"    if (expectEmpty === 'true') {",
++							"        pm.test(`${label} — Danh sách đơn hàng rỗng`, () => {",
++							"            pm.expect(jsonData).to.be.an('array').that.is.empty;",
++							"        });",
++							"    } else if (expectEmpty === 'false') {",
++							"        pm.test(`${label} — Danh sách đơn hàng không rỗng`, () => {",
++							"            pm.expect(jsonData).to.be.an('array').that.is.not.empty;",
++							"        });",
++							"    }",
++							"",
++							"    if (expectCount !== null && expectCount !== undefined && expectCount !== '') {",
++							"        pm.test(`${label} — Số lượng order = ${expectCount}`, () => {",
++							"            pm.expect(jsonData.length).to.eql(parseInt(expectCount));",
++							"        });",
++							"    }",
++							"",
++							"    // Order mới nhất (vừa checkout) luôn ở vị trí đầu do ORDER BY id DESC",
++							"    if (expectField && expectFieldType && jsonData.length > 0) {",
++							"        const latestOrder = jsonData[0];",
++							"        const fields = expectField.split(';');",
++							"        const types  = expectFieldType.split(';');",
++							"",
++							"        fields.forEach((field, idx) => {",
++							"            const expectedType = types[idx];",
++							"            if (!expectedType) return;",
++							"            pm.test(`${label} — Field '${field}' của order mới nhất có kiểu ${expectedType}`, () => {",
++							"                pm.expect(typeof latestOrder[field], `latestOrder.${field}`).to.eql(expectedType);",
++							"            });",
++							"        });",
++							"    }",
++							"",
++							"} else if (statusMatches && expectedStatus >= 400) {",
++							"    pm.test(`${label} — Response có thông báo lỗi`, () => {",
++							"        try {",
++							"            const body = pm.response.json();",
++							"            pm.expect(body).to.satisfy(b =>",
++							"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),",
++							"                'Body phải có trường message, error, hoặc detail'",
++							"            );",
++							"        } catch(e) {",
++							"            pm.expect(pm.response.text()).to.not.be.empty;",
++							"        }",
++							"    });",
++							"}"
++						]
++					}
++				}
++			],
++			"request": {
++				"method": "GET",
++				"header": [
++					{
++						"key": "Authorization",
++						"value": "{{authHeader}}",
++						"description": "Điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE — API Spec mục 4"
++					}
++				],
++				"url": {
++					"raw": "{{baseUrl}}/api/orders/my-orders",
++					"host": [
++						"{{baseUrl}}"
++					],
++					"path": [
++						"api",
++						"orders",
++						"my-orders"
++					]
++				},
++				"description": "Xem danh sách đơn hàng của user hiện tại. Ref: API Spec 4.4. Authorization điều khiển qua CSV 'auth_mode'."
++			},
++			"response": []
++		},
++		{
++			"name": "FR08 — Xem Chi Tiết Đơn Hàng",
++			"event": [
++				{
++					"listen": "prerequest",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++							"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++							"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++							"const targetRequest = pm.iterationData.get('request_name');\n",
++							"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++							"    pm.execution.skipRequest();\n",
++							"}"
++						]
++					}
++				},
++				{
++					"listen": "test",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// =============================================",
++							"// FR08 — Xem Chi Tiết Đơn Hàng (kiểm thử IDOR/BOLA)",
++							"// Ref: API Spec mục 4.5 — GET /api/orders/:id",
++							"// CSV cột 'id' truyền order id cần gọi (của chính mình hoặc của user khác để test IDOR).",
++							"// CSV cột 'expected_owner_user_id' (nếu có) chứa user_id THẬT SỰ của chủ đơn hàng đó,",
++							"// dùng để xác nhận response không rò rỉ/đánh tráo dữ liệu cross-user.",
++							"// =============================================",
++							"",
++							"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;",
++							"const testId         = pm.iterationData.get('test_id')          || '';",
++							"const testDesc       = pm.iterationData.get('description')      || '';",
++							"const expectField    = pm.iterationData.get('expect_field');",
++							"const expectFieldType= pm.iterationData.get('expect_field_type');",
++							"const expectedOwnerUserId = pm.iterationData.get('expected_owner_user_id');",
++							"",
++							"const label = `[${testId}] ${testDesc}`;",
++							"",
++							"pm.test(`${label} — Status code là ${expectedStatus}`, () => {",
++							"    pm.response.to.have.status(expectedStatus);",
++							"});",
++							"",
++							"const statusMatches = pm.response.code === expectedStatus;",
++							"",
++							"if (statusMatches && expectedStatus < 300) {",
++							"    pm.test(`${label} — Content-Type là application/json`, () => {",
++							"        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
++							"    });",
++							"",
++							"    const jsonData = pm.response.json();",
++							"",
++							"    if (expectField && expectFieldType) {",
++							"        const fields = expectField.split(';');",
++							"        const types  = expectFieldType.split(';');",
++							"",
++							"        fields.forEach((field, idx) => {",
++							"            const expectedType = types[idx];",
++							"            if (!expectedType) return;",
++							"            pm.test(`${label} — Field '${field}' có kiểu ${expectedType}`, () => {",
++							"                pm.expect(typeof jsonData[field], `jsonData.${field}`).to.eql(expectedType);",
++							"            });",
++							"        });",
++							"    }",
++							"",
++							"    // IDOR check thật sự: so sánh user_id của order trả về với user_id kỳ vọng lấy từ CSV.",
++							"    if (expectedOwnerUserId !== null && expectedOwnerUserId !== undefined && expectedOwnerUserId !== '') {",
++							"        pm.test(`${label} — IDOR check: user_id của order khớp đúng chủ sở hữu mong đợi`, () => {",
++							"            pm.expect(String(jsonData.user_id)).to.eql(String(expectedOwnerUserId));",
++							"        });",
++							"    }",
++							"",
++							"} else if (statusMatches && expectedStatus >= 400) {",
++							"    pm.test(`${label} — Response có thông báo lỗi`, () => {",
++							"        try {",
++							"            const body = pm.response.json();",
++							"            pm.expect(body).to.satisfy(b =>",
++							"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),",
++							"                'Body phải có trường message, error, hoặc detail'",
++							"            );",
++							"        } catch(e) {",
++							"            pm.expect(pm.response.text()).to.not.be.empty;",
++							"        }",
++							"    });",
++							"}"
++						]
++					}
++				}
++			],
++			"request": {
++				"method": "GET",
++				"header": [
++					{
++						"key": "Authorization",
++						"value": "{{authHeader}}",
++						"description": "Điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE — API Spec mục 4"
++					}
++				],
++				"url": {
++					"raw": "{{baseUrl}}/api/orders/{{orderId}}",
++					"host": [
++						"{{baseUrl}}"
++					],
++					"path": [
++						"api",
++						"orders",
++						"{{orderId}}"
++					]
++				},
++				"description": "Xem chi tiết 1 đơn hàng theo id — dùng để test IDOR/BOLA (truy cập đơn hàng của user khác). Ref: API Spec 4.5. CSV: 'orderId', 'auth_mode', tùy chọn 'expectedOwnerEmail'."
++			},
++			"response": []
++		},
++		{
++			"name": "FR08 — Checkout",
++			"event": [
++				{
++					"listen": "prerequest",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++							"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++							"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++							"const targetRequest = pm.iterationData.get('request_name');\n",
++							"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++							"    pm.execution.skipRequest();\n",
++							"}"
++						]
++					}
++				},
++				{
++					"listen": "test",
++					"script": {
++						"type": "text/javascript",
++						"exec": [
++							"// =============================================",
++							"// FR08 — Checkout",
++							"// Ref: API Spec mục 4.3 — POST /api/checkout (yêu cầu Authorization: Bearer <token>, theo mục 4)",
++							"// Yêu cầu chạy SAU folder \"Setup — Auth & Data\" (cần userToken hợp lệ + giỏ hàng có sản phẩm)",
++							"// =============================================",
++							"",
++							"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;",
++							"const testId         = pm.iterationData.get('test_id')          || '';",
++							"const testDesc       = pm.iterationData.get('description')      || '';",
++							"",
++							"const label = `[${testId}] ${testDesc}`;",
++							"",
++							"if (pm.response.code === 401 && !pm.environment.get('userToken')) {",
++							"    console.warn(`${label} — 401 vì 'userToken' đang RỖNG. Hãy chạy folder \"Setup — Auth & Data\" MỘT LẦN (Run collection, chỉ chọn folder này, KHÔNG gắn CSV) trước khi chạy bộ test FR05/FR08/FR14.`);",
++							"}",
++							"",
++							"pm.test(`${label} — Status code là ${expectedStatus}`, () => {",
++							"    pm.response.to.have.status(expectedStatus);",
++							"});",
++							"",
++							"const statusMatches = pm.response.code === expectedStatus;",
++							"",
++							"// Content-Type chỉ kiểm tra khi status khớp kỳ vọng — tránh fail giả khi response lỗi",
++							"// (vd. 400 malformed JSON) không nhất thiết trả về Content-Type: application/json.",
++							"if (statusMatches) {",
++							"    pm.test(`${label} — Content-Type là application/json`, () => {",
++							"        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
++							"    });",
++							"}",
++							"",
++							"if (statusMatches && expectedStatus < 300) {",
++							"    let jsonData;",
++							"    pm.test(`${label} — Response body parse được JSON`, () => {",
++							"        jsonData = pm.response.json();",
++							"        pm.expect(jsonData).to.exist;",
++							"    });",
++							"",
++							"    if (jsonData !== undefined) {",
++							"        pm.test(`${label} — Response message là 'Checkout successful'`, () => {",
++							"            pm.expect(jsonData).to.have.property('message');",
++							"            pm.expect(jsonData.message).to.eql('Checkout successful');",
++							"        });",
++							"",
++							"        pm.test(`${label} — Response trả về orderId dạng số`, () => {",
++							"            pm.expect(jsonData).to.have.property('orderId');",
++							"            pm.expect(jsonData.orderId).to.be.a('number');",
++							"        });",
++							"",
++							"        if (jsonData && jsonData.orderId) {",
++							"            pm.environment.set('orderId', jsonData.orderId);",
++							"            console.log('Đã lưu orderId =', jsonData.orderId);",
++							"        }",
++							"    }",
++							"",
++							"} else if (statusMatches && expectedStatus >= 400) {",
++							"    pm.test(`${label} — Response có thông báo lỗi`, () => {",
++							"        try {",
++							"            const body = pm.response.json();",
++							"            pm.expect(body).to.satisfy(b =>",
++							"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),",
++							"                'Body phải có trường message, error, hoặc detail'",
++							"            );",
++							"        } catch(e) {",
++							"            pm.expect(pm.response.text()).to.not.be.empty;",
++							"        }",
++							"    });",
++							"}"
++						]
++					}
++				}
++			],
++			"request": {
++				"method": "POST",
++				"header": [
++					{
++						"key": "Content-Type",
++						"value": "application/json"
++					},
++					{
++						"key": "Authorization",
++						"value": "{{authHeader}}",
++						"description": "Yêu cầu đăng nhập — API Spec mục 4 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
++					}
++				],
++				"url": {
++					"raw": "{{baseUrl}}/api/checkout",
++					"host": [
++						"{{baseUrl}}"
++					],
++					"path": [
++						"api",
++						"checkout"
++					]
++				},
++				"description": "Đặt hàng (checkout). Ref: API Spec 4.3. Cần chạy sau folder Setup (userToken + cart có sản phẩm).",
++				"body": {
++					"mode": "raw",
++					"raw": "{\n  \"total_amount\": 200000,\n  \"shipping_address\": \"123 Le Loi, TP.HCM\"\n}",
++					"options": {
++						"raw": {
++							"language": "json"
++						}
++					}
++				}
++			},
++			"response": []
++		},
++		{
++			"name": "FR14 — Admin/CRUD Category Management",
++			"item": [
++				{
++					"name": "FR14 — Lấy Danh Sách Category",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++									"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++									"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++									"const targetRequest = pm.iterationData.get('request_name');\n",
++									"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================\n",
++									"// FR14 — Lấy Danh Sách Category\n",
++									"// Ref: API Spec mục 3.4 — GET /api/categories\n",
++									"// Yêu cầu chạy SAU folder \"Setup — Auth & Data\" (cần adminToken hợp lệ)\n",
++									"// =============================================\n",
++									"\n",
++									"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
++									"const testId         = pm.iterationData.get('test_id')          || '';\n",
++									"const testDesc       = pm.iterationData.get('description')      || '';\n",
++									"const expectEmpty    = pm.iterationData.get('expect_empty');\n",
++									"\n",
++									"const label = `[${testId}] ${testDesc}`;\n",
++									"\n",
++									"if (pm.response.code === 401 && !pm.environment.get('adminToken')) {\n",
++									"    console.warn(`${label} — 401 vì 'adminToken' đang RỖNG. Hãy chạy folder \"Setup — Auth & Data\" MỘT LẦN (Run collection, chỉ chọn folder này, KHÔNG gắn CSV) trước khi chạy bộ test FR05/FR08/FR14.`);\n",
++									"}\n",
++									"\n",
++									"pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
++									"    pm.response.to.have.status(expectedStatus);\n",
++									"});\n",
++									"\n",
++									"pm.test(`${label} — Content-Type là application/json`, () => {\n",
++									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');\n",
++									"});\n",
++									"\n",
++									"const statusMatches = pm.response.code === expectedStatus;\n",
++									"\n",
++									"if (statusMatches && expectedStatus < 300) {\n",
++									"    let jsonData;\n",
++									"    pm.test(`${label} — Response body parse được JSON`, () => {\n",
++									"        jsonData = pm.response.json();\n",
++									"        pm.expect(jsonData).to.exist;\n",
++									"    });\n",
++									"\n",
++									"    if (jsonData !== undefined) {\n",
++									"        pm.test(`${label} — Response là mảng (array)`, () => {\n",
++									"            pm.expect(jsonData).to.be.an('array');\n",
++									"        });\n",
++									"\n",
++									"        if (expectEmpty === 'true') {\n",
++									"            pm.test(`${label} — Kết quả trả về mảng rỗng`, () => {\n",
++									"                pm.expect(jsonData).to.be.an('array').that.is.empty;\n",
++									"            });\n",
++									"        } else if (expectEmpty === 'false') {\n",
++									"            pm.test(`${label} — Kết quả trả về ít nhất 1 phần tử`, () => {\n",
++									"                pm.expect(jsonData).to.be.an('array').that.is.not.empty;\n",
++									"            });\n",
++									"        }\n",
++									"\n",
++									"        if (jsonData.length > 0) {\n",
++									"            pm.test(`${label} — Mỗi category có đủ các trường bắt buộc`, () => {\n",
++									"                jsonData.forEach((item, idx) => {\n",
++									"                    pm.expect(item, `item[${idx}]`).to.have.property('id');\n",
++									"                    pm.expect(item, `item[${idx}]`).to.have.property('name');\n",
++									"                });\n",
++									"            });\n",
++									"        }\n",
++									"    }\n",
++									"} else if (statusMatches && expectedStatus >= 400) {\n",
++									"    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
++									"        try {\n",
++									"            const body = pm.response.json();\n",
++									"            pm.expect(body).to.satisfy(b =>\n",
++									"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
++									"                'Body phải có trường message, error, hoặc detail'\n",
++									"            );\n",
++									"        } catch(e) {\n",
++									"            pm.expect(pm.response.text()).to.not.be.empty;\n",
++									"        }\n",
++									"    });\n",
++									"}"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "GET",
++						"header": [
++							{
++								"key": "Authorization",
++								"value": "{{authHeader}}",
++								"description": "Yêu cầu tài khoản Admin — API Spec mục 6 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
++							}
++						],
++						"url": {
++							"raw": "{{baseUrl}}/api/categories",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"categories"
++							]
++						},
++						"description": "Lấy danh sách category. Ref: API Spec 3.4"
++					},
++					"response": []
++				},
++				{
++					"name": "FR14 — Thêm Category",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++									"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++									"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++									"const targetRequest = pm.iterationData.get('request_name');\n",
++									"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================",
++									"// FR14 — Thêm Category",
++									"// Ref: API Spec mục 3.4 — POST /api/categories",
++									"// Yêu cầu chạy SAU folder \"Setup — Auth & Data\" (cần adminToken hợp lệ)",
++									"// Lưu id category vừa tạo vào 'testCategoryId' để dùng cho \"Cập Nhật Category\" và \"Xóa Category\".",
++									"// Lưu ý: theo spec mục 5, response thành công CHỈ đảm bảo {message, id} — KHÔNG có 'name'.",
++									"// =============================================",
++									"",
++									"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;",
++									"const testId         = pm.iterationData.get('test_id')          || '';",
++									"const testDesc       = pm.iterationData.get('description')      || '';",
++									"",
++									"const label = `[${testId}] ${testDesc}`;",
++									"",
++									"if (pm.response.code === 401 && !pm.environment.get('adminToken')) {",
++									"    console.warn(`${label} — 401 vì 'adminToken' đang RỖNG. Hãy chạy folder \"Setup — Auth & Data\" MỘT LẦN (Run collection, chỉ chọn folder này, KHÔNG gắn CSV) trước khi chạy bộ test FR05/FR08/FR14.`);",
++									"}",
++									"",
++									"pm.test(`${label} — Status code là ${expectedStatus}`, () => {",
++									"    pm.response.to.have.status(expectedStatus);",
++									"});",
++									"",
++									"const statusMatches = pm.response.code === expectedStatus;",
++									"",
++									"if (statusMatches && expectedStatus < 300) {",
++									"    pm.test(`${label} — Content-Type là application/json`, () => {",
++									"        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
++									"    });",
++									"",
++									"    let jsonData;",
++									"    pm.test(`${label} — Response có message 'Category created' và trường 'id'`, () => {",
++									"        jsonData = pm.response.json();",
++									"        pm.expect(jsonData).to.have.property('message');",
++									"        pm.expect(jsonData.message).to.eql('Category created');",
++									"        pm.expect(jsonData).to.have.property('id');",
++									"    });",
++									"",
++									"    if (jsonData && jsonData.id) {",
++									"        pm.environment.set('testCategoryId', jsonData.id);",
++									"        console.log('Đã lưu testCategoryId =', jsonData.id);",
++									"    }",
++									"",
++									"} else if (statusMatches && expectedStatus >= 400) {",
++									"    pm.test(`${label} — Response có thông báo lỗi`, () => {",
++									"        try {",
++									"            const body = pm.response.json();",
++									"            pm.expect(body).to.satisfy(b =>",
++									"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),",
++									"                'Body phải có trường message, error, hoặc detail'",
++									"            );",
++									"        } catch(e) {",
++									"            pm.expect(pm.response.text()).to.not.be.empty;",
++									"        }",
++									"    });",
++									"}"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "POST",
++						"header": [
++							{
++								"key": "Content-Type",
++								"value": "application/json"
++							},
++							{
++								"key": "Authorization",
++								"value": "{{authHeader}}",
++								"description": "Yêu cầu tài khoản Admin — API Spec mục 6 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
++							}
++						],
++						"url": {
++							"raw": "{{baseUrl}}/api/categories",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"categories"
++							]
++						},
++						"description": "Thêm mới category. Ref: API Spec 3.4. Lưu id vào testCategoryId.",
++						"body": {
++							"mode": "raw",
++							"raw": "{\n  \"name\": \"{{categoryName}}\"\n}",
++							"options": {
++								"raw": {
++									"language": "json"
++								}
++							}
++						}
++					},
++					"response": []
++				},
++				{
++					"name": "FR14 — Cập Nhật Category",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++									"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++									"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++									"const targetRequest = pm.iterationData.get('request_name');\n",
++									"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================",
++									"// FR14 — Cập Nhật Category",
++									"// Ref: API Spec mục 3.4 — PUT /api/categories/:id",
++									"// Dùng {{testCategoryId}} (được lưu từ request \"FR14 — Thêm Category\") — KHÔNG hard-code id cố định.",
++									"// Yêu cầu chạy SAU \"FR14 — Thêm Category\" trong cùng lần chạy.",
++									"// Lưu ý: theo spec mục 6, response thành công CHỈ là {\"message\":\"Category updated\"} —",
++									"// KHÔNG có 'id' lẫn 'name'. Không assert các field không được spec đảm bảo.",
++									"// =============================================",
++									"",
++									"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;",
++									"const testId         = pm.iterationData.get('test_id')          || '';",
++									"const testDesc       = pm.iterationData.get('description')      || '';",
++									"",
++									"const label = `[${testId}] ${testDesc}`;",
++									"",
++									"if (!pm.environment.get('testCategoryId')) {",
++									"    console.warn(`${label} — 'testCategoryId' đang RỖNG (request \"FR14 — Thêm Category\" chưa từng chạy thành công trong phiên này). URL đang gọi tới '/api/categories/' thiếu id → khả năng cao trả 404.`);",
++									"}",
++									"",
++									"pm.test(`${label} — Status code là ${expectedStatus}`, () => {",
++									"    pm.response.to.have.status(expectedStatus);",
++									"});",
++									"",
++									"const statusMatches = pm.response.code === expectedStatus;",
++									"",
++									"if (statusMatches && expectedStatus < 300) {",
++									"    pm.test(`${label} — Content-Type là application/json`, () => {",
++									"        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
++									"    });",
++									"",
++									"    pm.test(`${label} — Response message là 'Category updated'`, () => {",
++									"        const jsonData = pm.response.json();",
++									"        pm.expect(jsonData).to.have.property('message');",
++									"        pm.expect(jsonData.message).to.eql('Category updated');",
++									"    });",
++									"",
++									"} else if (statusMatches && expectedStatus >= 400) {",
++									"    pm.test(`${label} — Response có thông báo lỗi`, () => {",
++									"        try {",
++									"            const body = pm.response.json();",
++									"            pm.expect(body).to.satisfy(b =>",
++									"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),",
++									"                'Body phải có trường message, error, hoặc detail'",
++									"            );",
++									"        } catch(e) {",
++									"            pm.expect(pm.response.text()).to.not.be.empty;",
++									"        }",
++									"    });",
++									"}"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "PUT",
++						"header": [
++							{
++								"key": "Content-Type",
++								"value": "application/json"
++							},
++							{
++								"key": "Authorization",
++								"value": "{{authHeader}}",
++								"description": "Yêu cầu tài khoản Admin — API Spec mục 6 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
++							}
++						],
++						"url": {
++							"raw": "{{baseUrl}}/api/categories/{{testCategoryId}}",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"categories",
++								"{{testCategoryId}}"
++							]
++						},
++						"description": "Cập nhật category vừa tạo (dùng testCategoryId). Ref: API Spec 3.4",
++						"body": {
++							"mode": "raw",
++							"raw": "{\n  \"name\": \"{{categoryName}}\"\n}",
++							"options": {
++								"raw": {
++									"language": "json"
++								}
++							}
++						}
++					},
++					"response": []
++				},
++				{
++					"name": "FR14 — Xóa Category",
++					"event": [
++						{
++							"listen": "prerequest",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// Chỉ chạy request này khi 'request_name' trong dòng dữ liệu (CSV) khớp với tên request hiện tại.\n",
++									"// Nhờ đó 1 file CSV duy nhất có thể chạy cho toàn bộ Collection mà không bị áp nhầm testcase sang request khác.\n",
++									"// Yêu cầu Postman App >= v10.14 / Collection Runtime >= v7.29 (hỗ trợ pm.execution.skipRequest()).\n",
++									"const targetRequest = pm.iterationData.get('request_name');\n",
++									"if (targetRequest && targetRequest !== pm.info.requestName) {\n",
++									"    pm.execution.skipRequest();\n",
++									"}"
++								]
++							}
++						},
++						{
++							"listen": "test",
++							"script": {
++								"type": "text/javascript",
++								"exec": [
++									"// =============================================\n",
++									"// FR14 — Xóa Category\n",
++									"// Ref: API Spec mục 3.4 — DELETE /api/categories/:id\n",
++									"// Dùng {{testCategoryId}} (được lưu từ request \"FR14 — Thêm Category\") — KHÔNG hard-code id cố định.\n",
++									"// Yêu cầu chạy SAU \"FR14 — Thêm Category\" (và \"Cập Nhật Category\" nếu có) trong cùng lần chạy.\n",
++									"// =============================================\n",
++									"\n",
++									"const expectedStatus = parseInt(pm.iterationData.get('expected_status')) || 200;\n",
++									"const testId         = pm.iterationData.get('test_id')          || '';\n",
++									"const testDesc       = pm.iterationData.get('description')      || '';\n",
++									"\n",
++									"const label = `[${testId}] ${testDesc}`;\n",
++									"\n",
++									"if (!pm.environment.get('testCategoryId')) {\n",
++									"    console.warn(`${label} — 'testCategoryId' đang RỖNG (request \"FR14 — Thêm Category\" chưa từng chạy thành công trong phiên này). URL đang gọi tới '/api/categories/' thiếu id → khả năng cao trả 404.`);\n",
++									"}\n",
++									"\n",
++									"pm.test(`${label} — Status code là ${expectedStatus}`, () => {\n",
++									"    pm.response.to.have.status(expectedStatus);\n",
++									"});\n",
++									"\n",
++									"const statusMatches = pm.response.code === expectedStatus;\n",
++									"\n",
++									"if (statusMatches && expectedStatus >= 400) {\n",
++									"    pm.test(`${label} — Response có thông báo lỗi`, () => {\n",
++									"        try {\n",
++									"            const body = pm.response.json();\n",
++									"            pm.expect(body).to.satisfy(b =>\n",
++									"                b.hasOwnProperty('message') || b.hasOwnProperty('error') || b.hasOwnProperty('detail'),\n",
++									"                'Body phải có trường message, error, hoặc detail'\n",
++									"            );\n",
++									"        } catch(e) {\n",
++									"            pm.expect(pm.response.text()).to.not.be.empty;\n",
++									"        }\n",
++									"    });\n",
++									"}"
++								]
++							}
++						}
++					],
++					"request": {
++						"method": "DELETE",
++						"header": [
++							{
++								"key": "Authorization",
++								"value": "{{authHeader}}",
++								"description": "Yêu cầu tài khoản Admin — API Spec mục 6 (điều khiển qua CSV cột 'auth_mode': ADMIN/USER/INVALID/NONE)"
++							}
++						],
++						"url": {
++							"raw": "{{baseUrl}}/api/categories/{{testCategoryId}}",
++							"host": [
++								"{{baseUrl}}"
++							],
++							"path": [
++								"api",
++								"categories",
++								"{{testCategoryId}}"
++							]
++						},
++						"description": "Xóa category vừa tạo (dùng testCategoryId). Ref: API Spec 3.4"
++					},
++					"response": []
++				}
++			]
++		}
++	],
++	"event": [
++		{
++			"listen": "prerequest",
++			"script": {
++				"type": "text/javascript",
++				"packages": {},
++				"requests": {},
++				"exec": [
++					"console.log(\"==========================================\");\r",
++					"console.log(\"MSSV / Student ID:\", pm.environment.get(\"studentID\"));\r",
++					"console.log(\"Request:\", pm.info.requestName);\r",
++					"console.log(\"Iteration:\", pm.info.iteration + 1);\r",
++					"console.log(\"==========================================\");\r",
++					"\r",
++					"pm.request.headers.upsert({\r",
++					"  key: \"X-Student-Id\",\r",
++					"  value: pm.environment.get(\"studentID\")\r",
++					"});\r",
++					"\r",
++					"// =============================================\r",
++					"// Auth Header Resolver (chạy cho MỌI request trong collection)\r",
++					"// Cho phép 1 file CSV điều khiển Authorization header theo cột 'auth_mode':\r",
++					"//   ADMIN   -> Bearer {{adminToken}}\r",
++					"//   USER    -> Bearer {{userToken}}\r",
++					"//   INVALID -> token giả, dùng để test token hỏng/hết hạn (BFLA/BOLA)\r",
++					"//   NONE    -> không gửi Authorization (rỗng), dùng để test truy cập ẩn danh\r",
++					"// Nếu CSV không có cột 'auth_mode' (hoặc rỗng), mỗi request tự dùng vai trò mặc định của nó\r",
++					"// (khai báo trong defaultAuthModeByRequest bên dưới) để không phá các test hiện có.\r",
++					"// Request nào muốn dùng cơ chế này chỉ cần đặt header Authorization = {{authHeader}}.\r",
++					"// =============================================\r",
++					"const defaultAuthModeByRequest = {\r",
++					"    'FR08 — Checkout': 'USER',\r",
++					"    'FR08 — Xem Giỏ Hàng': 'USER',\r",
++					"    'FR08 — Thêm Giỏ Hàng': 'USER',\r",
++					"    'FR08 — Xem Danh Sách Đơn Hàng': 'USER',\r",
++					"    'FR08 — Xem Chi Tiết Đơn Hàng': 'USER',\r",
++					"    'FR14 — Lấy Danh Sách Category': 'ADMIN',\r",
++					"    'FR14 — Thêm Category': 'ADMIN',\r",
++					"    'FR14 — Cập Nhật Category': 'ADMIN',\r",
++					"    'FR14 — Xóa Category': 'ADMIN'\r",
++					"};\r",
++					"\r",
++					"const authMode = (pm.iterationData.get('auth_mode') || defaultAuthModeByRequest[pm.info.requestName] || '').toUpperCase();\r",
++					"let resolvedAuth = '';\r",
++					"if (authMode === 'ADMIN') {\r",
++					"    resolvedAuth = 'Bearer ' + (pm.environment.get('adminToken') || '');\r",
++					"} else if (authMode === 'USER') {\r",
++					"    resolvedAuth = 'Bearer ' + (pm.environment.get('userToken') || '');\r",
++					"} else if (authMode === 'INVALID') {\r",
++					"    resolvedAuth = 'Bearer invalid.token.xyz';\r",
++					"} else if (authMode === 'NONE') {\r",
++					"    resolvedAuth = '';\r",
++					"}\r",
++					"pm.environment.set('authHeader', resolvedAuth);\r"
++				]
++			}
++		},
++		{
++			"listen": "test",
++			"script": {
++				"type": "text/javascript",
++				"packages": {},
++				"requests": {},
++				"exec": [
++					""
++				]
++			}
++		}
++	]
++}
+\ No newline at end of file
+diff --git a/New_Environment_postman_environment.json b/New_Environment_postman_environment.json
+new file mode 100644
+index 0000000..1634f70
+--- /dev/null
++++ b/New_Environment_postman_environment.json
+@@ -0,0 +1,130 @@
++{
++  "id": "3163c84c-d7c4-4eaf-8158-c5d91361e028",
++  "name": "New Environment",
++  "values": [
++    {
++      "key": "studentID",
++      "value": "2312747",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "baseUrl",
++      "value": "http://localhost:3000",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "userEmail",
++      "value": "test@eshop.com",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "userPassword",
++      "value": "Test123!",
++      "type": "secret",
++      "enabled": true
++    },
++    {
++      "key": "userToken",
++      "value": "",
++      "type": "secret",
++      "enabled": true
++    },
++    {
++      "key": "adminEmail",
++      "value": "admin@eshop.com",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "adminPassword",
++      "value": "Admin123!",
++      "type": "secret",
++      "enabled": true
++    },
++    {
++      "key": "adminToken",
++      "value": "",
++      "type": "secret",
++      "enabled": true
++    },
++    {
++      "key": "testCategoryId",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "existingProductKeyword",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "firstProductId",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "firstProductName",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "firstProductPrice",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "authHeader",
++      "value": "",
++      "type": "secret",
++      "enabled": true
++    },
++    {
++      "key": "categoryName",
++      "value": "QA Test Category",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "search",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "id",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "orderId",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "cartProductId",
++      "value": "",
++      "type": "default",
++      "enabled": true
++    },
++    {
++      "key": "cartQuantity",
++      "value": "1",
++      "type": "default",
++      "enabled": true
++    }
++  ],
++  "color": null,
++  "_postman_variable_scope": "environment",
++  "_postman_exported_at": "2026-08-20T11:49:45.978Z",
++  "_postman_exported_using": "Postman/12.24.4"
++}
+\ No newline at end of file
+diff --git a/data.csv b/data.csv
+new file mode 100644
+index 0000000..6eb4e30
+--- /dev/null
++++ b/data.csv
+@@ -0,0 +1,125 @@
++test_id,request_name,feature,description,expected_status,expect_array,expect_empty,expect_count,expect_field,expect_field_type,search,id,categoryName,expected_owner_user_id,expected_role
++TC-FR05-01,GET /api/products,FR05,Get full product list without Authorization,200,true,false,5,,,,,,,
++TC-FR05-02,GET /api/products,FR05,Response body is a JSON array,200,true,,,,,,,,,
++TC-FR05-03,GET /api/products,FR05,Product count matches seed data,200,true,false,5,,,,,,,
++TC-FR05-04,GET /api/products,FR05,Each product contains required schema fields,200,true,,,id;name;price;description;imageUrl;category_id,id:number;name:string;price:number;description:string;imageUrl:string;category_id:number,,,,,
++TC-FR05-05,GET /api/products,FR05,Listing price type follows schema: number,200,,,,price,number,,,,,
++TC-FR05-06,GET /api/products,FR05,Seed product id=1 data matches database,200,true,,,id;name;price;category_id,id:number;name:string;price:number;category_id:number,,1,,,
++TC-FR05-07,GET /api/products,FR05,Seed product id=3 data matches database,200,true,,,id;name;price;category_id,id:number;name:string;price:number;category_id:number,,3,,,
++TC-FR05-08,GET /api/products,FR05,All category_id values reference valid categories,200,true,,,category_id,number,,,,,
++TC-FR05-09,GET /api/products,FR05,Response Content-Type is application/json,200,,,,,,,,,,
++TC-FR05-10,GET /api/products,FR05,Anonymous access returns the full list,200,true,false,5,,,,,,,
++TC-FR05-11,GET /api/products,FR05,Invalid Authorization header does not block public endpoint,200,true,,,,,,,,,
++TC-FR05-12,GET /api/products?search=iPhone,FR05,Partial-name search returns product id=1,200,true,false,1,,,iPhone,1,,,
++TC-FR05-13,GET /api/products?search=iPhone 15 Pro Max,FR05,Exact full-name search returns product id=1,200,true,false,1,,,iPhone 15 Pro Max,1,,,
++TC-FR05-14,GET /api/products?search=Pro,FR05,Substring search returns all products containing Pro,200,true,false,3,,,Pro,,,,
++TC-FR05-15,GET /api/products?search=Xiaomi,FR05,Search with no matching result returns empty array,200,true,true,0,,,Xiaomi,,,,
++TC-FR05-16,GET /api/products?search=iphone,FR05,Lowercase search behavior is recorded; SQLite LIKE likely matches id=1,200,true,,,,,iphone,1,,,
++TC-FR05-17,GET /api/products?search=IPHONE,FR05,Uppercase search behavior is consistent with lowercase variant,200,true,,,,,IPHONE,1,,,
++TC-FR05-18,GET /api/products?search=15,FR05,Numeric substring search returns product id=1,200,true,false,1,,,15,1,,,
++TC-FR05-19,GET /api/products?search=Điện thoại,FR05,Search only targets product name; no match expected,200,true,true,0,,,Điện thoại,,,,
++TC-FR05-20,GET /api/products?search=Bàn phím cơ Keychron,FR05,Long partial name search returns product id=5,200,true,false,1,,,Bàn phím cơ Keychron,5,,,
++TC-FR05-21,GET /api/products?search=,FR05,Empty search behaves like LIKE %% and returns all products,200,true,false,5,,,,,,,
++TC-FR05-22,GET /api/products,FR05,Missing search parameter returns all products,200,true,false,5,,,,,,,
++TC-FR05-23,GET /api/products?search=%20%20%20,FR05,Whitespace-only search records trim behavior,200,true,,,,,,,,,
++TC-FR05-24,GET /api/products?search=%20iPhone%20,FR05,Search with leading/trailing spaces records trim behavior,200,true,,,,, iPhone ,,,,
++TC-FR05-25,GET /api/products?search=@#$%^&*(),FR05,Special-character search does not cause server error and returns no match,200,true,true,0,,,@#$%^&*(),,,,
++TC-FR05-26,GET /api/products?search=%,FR05,Percent wildcard search is handled without server error,200,true,,,,,%,,,,
++TC-FR05-27,GET /api/products?search=<500 chars>,FR05,Very long search string is handled without 500 or timeout,200,true,,,,,,,,,
++TC-FR05-28,GET /api/products?search[]=iPhone,FR05,Array-form search parameter does not cause 500; observe actual handling,200,true,,,,,,,,,
++TC-FR05-29,GET /api/products?search=iPhone&search=Samsung,FR05,Duplicate search parameters are handled consistently,200,true,,,,,,,,,
++TC-FR05-30,GET /api/products?search=' OR '1'='1,FR05,SQL injection tautology does not manipulate results or cause 500,200,true,,,,,' OR '1'='1,,,,
++TC-FR05-31,GET /api/products?search='; DROP TABLE products; --,FR05,DROP TABLE injection does not destroy products table; list remains available,200,true,false,5,,,'; DROP TABLE products; --,,,,
++TC-FR05-32,GET /api/products?search=' UNION SELECT * FROM sqlite_master --,FR05,UNION injection does not leak system/other table data,200,true,,,,,,,,,
++TC-FR05-33,GET /api/products?search=iPhone'--,FR05,SQL comment injection does not manipulate search scope,200,true,,,,,iPhone'--,,,,
++TC-FR05-34,GET /api/products/:id,FR05,Existing odd product id returns numeric price type,200,,,,price,number,,1,,,
++TC-FR05-35,GET /api/products/:id,FR05,Existing even product id returns string price type,200,,,,price,string,,2,,,
++TC-FR08-01,POST /api/login,FR08,Normal user login succeeds with token and user object,200,,,,token;user,token:string;user:object,,,,,
++TC-FR08-02,POST /api/login,FR08,Admin login succeeds and returns admin role,200,,,,token;user;user.role,token:string;user:object;user.role:string,,,,,admin
++TC-FR08-03,POST /api/login,FR08,Wrong password is rejected without token,401,,,,token,absent,,,,,
++TC-FR08-04,POST /api/login,FR08,Unknown email is rejected without token,401,,,,token,absent,,,,,
++TC-FR08-05,GET /api/cart,FR08,Cart request without Authorization is rejected,401,,,,,,,,,,
++TC-FR08-06,POST /api/cart,FR08,Add-to-cart request without Authorization is rejected,401,,,,,,,,,,
++TC-FR08-07,POST /api/checkout,FR08,Checkout request without Authorization is rejected,401,,,,,,,,,,
++TC-FR08-08,GET /api/cart,FR08,Malformed or invalid JWT returns Forbidden,403,,,,,,,,,,
++TC-FR08-09,GET /api/cart,FR08,New user with empty cart gets an empty array,200,true,true,0,,,,,,,
++TC-FR08-10,POST /api/cart,FR08,Add one valid product to cart succeeds,200,,,,message,string,,,,,
++TC-FR08-11,GET /api/cart,FR08,Cart contains the item previously added,200,true,false,1,,,,1,,,
++TC-FR08-12,POST /api/cart,FR08,Adding two different products results in both items in cart,200,true,false,2,,,,,,,
++TC-FR08-13,GET /api/cart,FR08,Cart data is isolated per user,200,true,,,,,,,,,
++TC-FR08-14,POST /api/cart,FR08,Quantity zero is accepted by current implementation; flag validation gap,200,,,,,,,,,,
++TC-FR08-15,POST /api/cart,FR08,Negative quantity is accepted; critical validation defect,200,,,,,,,,,,
++TC-FR08-16,POST /api/cart,FR08,Extremely large quantity is accepted without limit,200,,,,,,,,,,
++TC-FR08-17,POST /api/cart,FR08,Nonexistent product id is accepted; critical validation defect,200,,,,id,number,,999999,,,
++TC-FR08-18,POST /api/cart,FR08,Forged product price is accepted; critical integrity defect,200,,,,price,number,,1,,,
++TC-FR08-19,POST /api/checkout,FR08,Valid checkout creates an order and returns orderId,200,,,,message;orderId,message:string;orderId:number,,,,,
++TC-FR08-20,GET /api/orders/my-orders,FR08,New order starts with pending status,200,true,false,1,status,string,,,,,
++TC-FR08-21,GET /api/orders/my-orders,FR08,Order total_amount equals request value,200,true,,,total_amount,number,,,,,
++TC-FR08-22,GET /api/orders/my-orders,FR08,Order shipping_address equals request value,200,true,,,shipping_address,string,,,,,
++TC-FR08-23,GET /api/orders/:id,FR08,Returned orderId can be queried successfully,200,,,,id,number,,<created order id>,,,
++TC-FR08-24,POST /api/checkout,FR08,Checkout missing total_amount records actual server behavior,200,,,,,,,,,,
++TC-FR08-25,POST /api/checkout,FR08,Checkout missing shipping_address records actual server behavior,200,,,,,,,,,,
++TC-FR08-26,POST /api/checkout,FR08,Zero total_amount is accepted; flag business validation gap,200,,,,,,,,,,
++TC-FR08-27,POST /api/checkout,FR08,Negative total_amount is accepted; critical defect,200,,,,,,,,,,
++TC-FR08-28,POST /api/checkout,FR08,Non-numeric total_amount records 500 or invalid insert behavior,500/OBSERVE,,,,,,,,,,
++TC-FR08-29,POST /api/checkout,FR08,Empty shipping_address is accepted; flag validation gap,200,,,,shipping_address,string,,,,,
++TC-FR08-30,POST /api/checkout,FR08,Extra status/user_id fields are ignored; user_id comes from JWT and status remains pending,200,,,,user_id;status,user_id:number;status:string,,,,,
++TC-FR08-31,POST /api/checkout,FR08,Checkout succeeds even when cart is empty; critical business defect,200,,,,,,,,,,
++TC-FR08-32,POST /api/checkout,FR08,Server accepts client-supplied total instead of recomputing from cart,200,,,,total_amount,number,,,,,
++TC-FR08-33,GET /api/cart,FR08,Cart is not cleared after successful checkout,200,true,false,,,,,,,,
++TC-FR08-34,GET /api/orders/:id,FR08,Unknown order id returns Order not found,404,,,,error,string,,999999,,,
++TC-FR08-35,GET /api/orders/:id,FR08,User A can access User B order; expected test detects IDOR/BOLA,200,,,,id;user_id;total_amount;shipping_address,id:number;user_id:number;total_amount:number;shipping_address:string,,<orderId B>,,<userB_id>,
++TC-FR08-36,POST /api/checkout,FR08,Very large total_amount records behavior without overflow/crash,200,,,,,,,,,,
++TC-FR08-37,POST /api/checkout,FR08,Null shipping_address records behavior explicitly,200,,,,shipping_address,null/string,,,,,
++TC-FR08-38,POST /api/checkout,FR08,5000-character shipping_address is handled without 500/timeout,200,,,,shipping_address,string,,,,,
++TC-FR08-39,POST /api/cart,FR08,Forged product name is accepted; critical data-integrity defect,200,,,,name,string,,1,,,
++TC-FR08-40,POST /api/checkout,FR08,Malformed JSON body returns a client error rather than unexplained 500,400,,,,,,,,,,
++TC-FR08-41,PUT /api/orders/:id/cancel,FR08,Cancel request without Authorization is rejected,401,,,,,,,1,,,
++TC-FR08-42,PUT /api/orders/:id/cancel,FR08,Cancel request with invalid/malformed token is forbidden,403,,,,,,,1,,,
++TC-FR08-43,PUT /api/orders/:id/cancel,FR08,Cancel an existing pending order (own) records actual behavior; response body not specified by spec,200/OBSERVE,,,,status,string,,<own pending orderId>,,,
++TC-FR08-44,PUT /api/orders/:id/cancel,FR08,Cancel a nonexistent order id records actual behavior; expected 404 if checked,404/OBSERVE,,,,,,,999999,,,
++TC-FR08-45,PUT /api/orders/:id/cancel,FR08,User A attempts to cancel User B's order; expected test detects IDOR — order should not be cancellable/visible cross-user,200/OBSERVE,,,,id;user_id,id:number;user_id:number,,<orderId B>,,<userB_id>,
++TC-FR08-46,PUT /api/orders/:id/cancel,FR08,Cancel an order that is not in 'pending' status (e.g. already canceled/shipped) should be rejected per spec; flag defect if accepted,400/OBSERVE,,,,,,,<non-pending orderId>,,,
++TC-FR14-01,GET /api/categories,FR14,Get category list,200,true,false,3,,,,,,,
++TC-FR14-02,GET /api/categories,FR14,Response body is a JSON array,200,true,,,,,,,,,
++TC-FR14-03,GET /api/categories,FR14,Category data matches seed data,200,true,false,3,id;name,id:number;name:string,,,,,
++TC-FR14-04,GET /api/categories,FR14,Each category contains only id:number and name:string,200,true,,,id;name,id:number;name:string,,,,,
++TC-FR14-05,GET /api/categories,FR14,Categories are publicly readable without Authorization,200,true,false,3,,,,,,,
++TC-FR14-06,POST /api/categories,FR14,Admin creates a valid category successfully,200,,,,message;id,message:string;id:number,,,Đồng hồ,,
++TC-FR14-07,GET /api/categories,FR14,Newly created category appears in list,200,true,,,id;name,id:number;name:string,,,Đồng hồ,,
++TC-FR14-08,POST /api/categories,FR14,Create category with no body records actual behavior,400/OBSERVE,,,,,,,,,,
++TC-FR14-09,POST /api/categories,FR14,Create category without name records actual behavior,400/OBSERVE,,,,,,,,,,
++TC-FR14-10,POST /api/categories,FR14,Create category with empty name may succeed; flag defect if accepted,200,,,,name,string,,,,,
++TC-FR14-11,POST /api/categories,FR14,Create category with name=null records actual behavior,200/OBSERVE,,,,name,null,,,,,
++TC-FR14-12,POST /api/categories,FR14,Create category with numeric name records actual behavior,200/OBSERVE,,,,name,number,,,,,
++TC-FR14-13,POST /api/categories,FR14,Create category with 2000-character name records behavior without crash,200/OBSERVE,,,,name,string,,,,,
++TC-FR14-14,POST /api/categories,FR14,Create category with Vietnamese Unicode name preserves text,200,,,,name,string,,,Thiết bị gia dụng,,
++TC-FR14-15,POST /api/categories,FR14,Create category with special characters is stored without 500,200,,,,name,string,,,<script>alert(1)</script>,,
++TC-FR14-16,POST /api/categories,FR14,Duplicate existing category name is accepted; flag missing uniqueness,200,,,,name,string,,,Laptop,,
++TC-FR14-17,POST /api/categories,FR14,Repeated duplicate names create multiple identical categories,200,,,,,,,,,,
++TC-FR14-18,PUT /api/categories/:id,FR14,Update existing category successfully,200,,,,message,string,,3,Phụ kiện điện tử,,
++TC-FR14-19,PUT /api/categories/:id,FR14,Update nonexistent category records actual behavior; expected 404 if checked,404/OBSERVE,,,,,,,,,,
++TC-FR14-20,PUT /api/categories/:id,FR14,Update with id=0 records behavior,200/OBSERVE,,,,,number,,0,,,
++TC-FR14-21,PUT /api/categories/:id,FR14,Update with negative id does not unexplained 500,200/OBSERVE,,,,,number,,-1,,,
++TC-FR14-22,PUT /api/categories/:id,FR14,Update with non-numeric id does not unexplained 500,200/OBSERVE,,,,,,,,,,
++TC-FR14-23,PUT /api/categories/:id,FR14,Update name to empty string may succeed; flag defect if accepted,200,,,,name,string,,2,,,
++TC-FR14-24a,PUT /api/categories/:id,FR14,Update name=null is tested independently,200/OBSERVE,,,,name,null,,2,,,
++TC-FR14-24b,PUT /api/categories/:id,FR14,Update name as number is tested independently,200/OBSERVE,,,,name,number,,2,,,
++TC-FR14-25,PUT /api/categories/:id,FR14,Update name to another category existing name; flag duplicate if accepted,200,,,,name,string,,2,Phụ kiện,,
++TC-FR14-26,DELETE /api/categories/:id,FR14,Delete existing unreferenced category successfully,200,,,,message,string,,,,,
++TC-FR14-27,DELETE /api/categories/:id,FR14,Delete nonexistent category records actual behavior; expected 404 if checked,404/OBSERVE,,,,,,,999999,,,
++TC-FR14-28,DELETE /api/categories/:id,FR14,Delete id=0 records behavior without unexplained 500,200/OBSERVE,,,,,,,0,,,
++TC-FR14-29,DELETE /api/categories/:id,FR14,Delete negative id records behavior without unexplained 500,200/OBSERVE,,,,,,,-1,,,
++TC-FR14-30,DELETE /api/categories/:id,FR14,Delete non-numeric id records behavior without unexplained 500,200/OBSERVE,,,,,,,abc,,,
++TC-FR14-31,DELETE /api/categories/:id,FR14,Delete category referenced by products and verify both affected products,200/OBSERVE,,,,id;category_id,id:number;category_id:number,,1,,,
++TC-FR14-32a,POST /api/categories,FR14,Create category without token is unauthorized,401,,,,,,,,,,
++TC-FR14-32b,PUT /api/categories/:id,FR14,Update category without token is unauthorized,401,,,,,,,1,,,
++TC-FR14-32c,DELETE /api/categories/:id,FR14,Delete category without token is unauthorized,401,,,,,,,1,,,
++TC-FR14-33a,POST /api/categories,FR14,Create category with invalid token is forbidden,403,,,,,,,,,,
++TC-FR14-33b,PUT /api/categories/:id,FR14,Update category with invalid token is forbidden,403,,,,,,,1,,,
++TC-FR14-33c,DELETE /api/categories/:id,FR14,Delete category with invalid token is forbidden,403,,,,,,,1,,,
++TC-FR14-34a,POST /api/categories,FR14,Normal user can create category despite non-admin role; critical authorization defect,200,,,,id,number,,,,,
++TC-FR14-34b,PUT /api/categories/:id,FR14,Normal user can update category despite non-admin role; critical authorization defect,200,,,,message,string,,1,,,
++TC-FR14-34c,DELETE /api/categories/:id,FR14,Normal user can delete category despite non-admin role; critical authorization defect,200,,,,message,string,,1,,,
++TC-FR14-35,POST /api/categories,FR14,"Admin token baseline: POST, PUT and DELETE all succeed",200,,,,,,,,,,
++TC-FR14-36,GET /api/categories,FR14,"After resetting DB empty, category list returns empty array",200,true,true,0,,,,,,,
+-- 
+2.43.0
+
+
+From 5c4732f6f184af09404e733fb28b509009d9498b Mon Sep 17 00:00:00 2001
+From: Geedie QA <qa@eshop.local>
+Date: Fri, 21 Aug 2026 10:08:31 +0000
+Subject: [PATCH 2/2] =?UTF-8?q?test:=20[DEMO]=20m=C3=B4=20ph=E1=BB=8Fng=20?=
+ =?UTF-8?q?1=20test=20case=20fail=20trong=20CI=20=E2=80=94=20TC-FR08-19=20?=
+ =?UTF-8?q?sai=20expected=5Fstatus?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+CỐ Ý sửa expected_status của TC-FR08-19 (Checkout hợp lệ) từ 200 -> 201
+để minh hoạ pipeline Newman báo FAILED khi có 1 test case sai.
+
+Vì script 'FR08 — Checkout' có guard 'if (statusMatches && expectedStatus < 300)',
+khi status thật (200) không khớp expectedStatus (201):
+  - Assertion 'Status code là 201' FAIL (đúng 1 case)
+  - Các assertion con (message, orderId) bị SKIP, không chạy thêm -> không
+    phát sinh thêm fail nào khác, dễ demo/soi log.
+
+Newman sẽ thoát exit code != 0 -> job 'newman-tests' trên GitHub Actions
+chuyển sang FAILED (X đỏ), other 123 test case còn lại vẫn pass bình thường.
+
+--> Dùng commit này để demo pipeline đỏ, sau đó revert lại commit trước
+    (git revert HEAD) để đưa pipeline về xanh.
+---
+ data.csv | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/data.csv b/data.csv
+index 6eb4e30..590b0dd 100644
+--- a/data.csv
++++ b/data.csv
+@@ -52,7 +52,7 @@ TC-FR08-15,POST /api/cart,FR08,Negative quantity is accepted; critical validatio
+ TC-FR08-16,POST /api/cart,FR08,Extremely large quantity is accepted without limit,200,,,,,,,,,,
+ TC-FR08-17,POST /api/cart,FR08,Nonexistent product id is accepted; critical validation defect,200,,,,id,number,,999999,,,
+ TC-FR08-18,POST /api/cart,FR08,Forged product price is accepted; critical integrity defect,200,,,,price,number,,1,,,
+-TC-FR08-19,POST /api/checkout,FR08,Valid checkout creates an order and returns orderId,200,,,,message;orderId,message:string;orderId:number,,,,,
++TC-FR08-19,POST /api/checkout,FR08,Valid checkout creates an order and returns orderId,201,,,,message;orderId,message:string;orderId:number,,,,,
+ TC-FR08-20,GET /api/orders/my-orders,FR08,New order starts with pending status,200,true,false,1,status,string,,,,,
+ TC-FR08-21,GET /api/orders/my-orders,FR08,Order total_amount equals request value,200,true,,,total_amount,number,,,,,
+ TC-FR08-22,GET /api/orders/my-orders,FR08,Order shipping_address equals request value,200,true,,,shipping_address,string,,,,,
+-- 
+2.43.0

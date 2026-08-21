@@ -1,0 +1,77 @@
+name: API Automated Tests (Newman)
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  newman-tests:
+    runs-on: ubuntu-latest
+
+    # Nếu API server được đóng gói thành Docker image riêng, dùng "services" để
+    # GitHub Actions tự khởi động container API song song với job test.
+    # Xoá khối "services" này nếu bạn start server bằng "npm run start" ở step riêng bên dưới.
+    services:
+      eshop-api:
+        image: <dockerhub-username>/eshop-api:latest   # <-- thay bằng image thật của bạn
+        ports:
+          - 3000:3000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Newman + reporter HTML
+        run: npm install -g newman newman-reporter-htmlextra
+
+      # Bỏ comment khối này nếu API nằm NGAY TRONG repo này (không dùng Docker service ở trên):
+      # - name: Install & start API server
+      #   run: |
+      #     npm ci
+      #     npm run start &
+      #     npx wait-on http://localhost:3000/api/categories --timeout 30000
+
+      - name: Wait for API to be ready
+        run: npx wait-on http://localhost:3000/api/categories --timeout 30000
+
+      - name: Run Newman test suite
+        run: |
+          mkdir -p newman
+          newman run New_Collection_postman_collection.json \
+            -e New_Environment_postman_environment.json \
+            -d data.csv \
+            --reporters cli,junit,htmlextra \
+            --reporter-junit-export newman/report.xml \
+            --reporter-htmlextra-export newman/report.html
+
+      # Newman tự thoát với exit code khác 0 nếu có bất kỳ test nào fail,
+      # nên bước trên sẽ tự làm cả job/workflow chuyển sang FAILED mà
+      # không cần thêm logic kiểm tra nào khác.
+
+      - name: Upload Newman HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-html-report
+          path: newman/report.html
+
+      - name: Upload JUnit report (để hiển thị test summary trên PR)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-junit-report
+          path: newman/report.xml
+
+      - name: Publish test summary lên PR/commit
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: 'newman/report.xml'
+          fail_on_failure: false   # để step trước (newman run) là nơi quyết định pass/fail, step này chỉ hiển thị summary
