@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+  checks: write        # cần cho bước "Publish test summary" (mikepenz/action-junit-report)
+  pull-requests: write # để action đó có thể comment summary lên PR
+
 jobs:
   newman-tests:
     runs-on: ubuntu-latest
@@ -25,8 +30,12 @@ jobs:
     #       - 3000:3000
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (kèm submodule eshop-sut)
         uses: actions/checkout@v4
+        with:
+          # QUAN TRỌNG: nếu không có dòng dưới, thư mục eshop-sut/ sẽ RỖNG trên runner
+          # (dù trên máy bạn eshop-sut/ đã có sẵn code sẵn nên không thấy vấn đề) -> npm ci ở bước sau sẽ fail ngay
+          submodules: recursive
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -37,6 +46,9 @@ jobs:
         run: npm install -g newman newman-reporter-htmlextra
 
       - name: Install & start API server
+        # eshop-sut là submodule chứa source code server thật.
+        # Nếu package.json của server nằm ở vị trí khác, đổi lại working-directory cho đúng.
+        working-directory: eshop-sut
         run: |
           npm ci
           npm run start &
@@ -72,7 +84,10 @@ jobs:
 
       - name: Publish test summary lên PR/commit
         if: always()
+        continue-on-error: true   # nếu action này lỗi (thiếu quyền, chạy từ fork PR...),
+                                   # KHÔNG được kéo cả job thành FAILED — Newman ở step
+                                   # trên mới là nơi duy nhất quyết định pass/fail thật
         uses: mikepenz/action-junit-report@v4
         with:
           report_paths: 'newman/report.xml'
-          fail_on_failure: false   # để step trước (newman run) là nơi quyết định pass/fail, step này chỉ hiển thị summary
+          fail_on_failure: false
