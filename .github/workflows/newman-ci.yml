@@ -61,13 +61,14 @@ jobs:
         run: npm install -g newman newman-reporter-htmlextra
 
       - name: Install & start API server
-        # eshop-sut là submodule chứa source code server thật.
-        # Nếu package.json của server nằm ở vị trí khác, đổi lại working-directory cho đúng.
-        # Dùng "npm install" thay vì "npm ci" vì repo eshop-sut chưa có package-lock.json
+        # eshop-sut là submodule (mono-repo có 3 frontend + 1 backend).
+        # Server thật (Express + sqlite3 + jsonwebtoken) nằm ở eshop-sut/backend,
+        # KHÔNG phải ở root của eshop-sut -> working-directory phải trỏ đúng vào đây.
+        # Dùng "npm install" thay vì "npm ci" vì backend chưa có package-lock.json
         # committed sẵn ("npm ci" bắt buộc phải có file lock, "npm install" thì không).
-        # Nếu sau này bạn thêm package-lock.json vào eshop-sut, có thể đổi lại thành "npm ci"
-        # để cài đặt nhanh & tái lập chính xác hơn.
-        working-directory: eshop-sut
+        # Nếu sau này bạn thêm package-lock.json vào eshop-sut/backend, có thể đổi lại
+        # thành "npm ci" để cài đặt nhanh & tái lập chính xác hơn.
+        working-directory: eshop-sut/backend
         run: |
           npm install
           npm run start &
