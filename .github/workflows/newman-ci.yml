@@ -75,8 +75,12 @@ jobs:
           npx wait-on http://localhost:3000/api/categories --timeout 30000
 
       - name: Run Newman test suite
+        # Collection/Environment/data.csv nằm trong thư mục con "HW06/" của repo
+        # (git ls-files xác nhận path là "HW06/New Collection.postman_collection.json"),
+        # KHÔNG phải ở repo root -> dùng working-directory để trỏ đúng vào đó.
         # Tên file có dấu cách -> PHẢI bọc trong dấu ngoặc kép, nếu không bash sẽ
         # hiểu nhầm "New" và "Collection.postman_collection.json" là 2 tham số khác nhau.
+        working-directory: HW06
         run: |
           mkdir -p newman
           newman run "New Collection.postman_collection.json" \
@@ -95,14 +99,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: newman-html-report
-          path: newman/report.html
+          path: HW06/newman/report.html
 
       - name: Upload JUnit report (để hiển thị test summary trên PR)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: newman-junit-report
-          path: newman/report.xml
+          path: HW06/newman/report.xml
 
       - name: Publish test summary lên PR/commit
         if: always()
@@ -111,5 +115,5 @@ jobs:
                                    # trên mới là nơi duy nhất quyết định pass/fail thật
         uses: mikepenz/action-junit-report@v4
         with:
-          report_paths: 'newman/report.xml'
+          report_paths: 'HW06/newman/report.xml'
           fail_on_failure: false
