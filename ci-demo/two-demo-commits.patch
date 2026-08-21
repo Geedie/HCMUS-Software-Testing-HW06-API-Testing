@@ -1,4 +1,4 @@
-From c869b713bf27cd4a58ee096fd9ce18ade6e53690 Mon Sep 17 00:00:00 2001
+From b9985a08d623effed7aa3ecd5dce0ceba5fbc599 Mon Sep 17 00:00:00 2001
 From: Geedie QA <qa@eshop.local>
 Date: Fri, 21 Aug 2026 10:08:18 +0000
 Subject: [PATCH 1/2] =?UTF-8?q?test(ci):=20thi=E1=BA=BFt=20l=E1=BA=ADp=20N?=
@@ -8,28 +8,36 @@ MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-- Thêm .github/workflows/newman-ci.yml chạy Newman tự động trên push/PR
-- data.csv: bộ 124 test case đã audit & sửa lỗi (xem báo cáo audit trước đó)
-- New_Collection_postman_collection.json: đã vá 9 script lỗi (IDOR check thật,
-  price type theo parity, message assertions còn thiếu, v.v.)
-- Kỳ vọng: newman run pass toàn bộ, exit code 0 -> pipeline xanh
+- Dùng .github/workflows/newman-ci.yml hiện có của repo (đã fix bug đếm dòng
+  ITER_COUNT: thay wc -l bằng awk 'END{print NR}' để không bị undercount khi
+  data.csv thiếu newline cuối file — tránh âm thầm bỏ sót test case cuối cùng).
+  KHÔNG tạo thêm một bản workflow trùng/khác cấu hình ở root nữa (bản cũ trong
+  patch dùng services với image placeholder <dockerhub-username>/... chưa
+  thay, không start API thật, sai tên file/đường dẫn -> sẽ luôn fail vì lý do
+  hạ tầng chứ không phải vì test case).
+- HW06/data.csv: bộ 124 test case đã audit & sửa lỗi (xem báo cáo audit trước đó)
+- HW06/New Collection.postman_collection.json: đã vá 9 script lỗi (IDOR check
+  thật, price type theo parity, message assertions còn thiếu, v.v.)
+- Đặt đúng tên file (có dấu cách) và đúng thư mục HW06/ để khớp với
+  working-directory mà newman-ci.yml đang trỏ tới
+- Kỳ vọng: newman run pass toàn bộ 124/124 test case, exit code 0 -> pipeline xanh
 ---
- .github/workflows/newman-ci.yml          |   77 +
- New_Collection_postman_collection.json   | 1916 ++++++++++++++++++++++
- New_Environment_postman_environment.json |  130 ++
- data.csv                                 |  125 ++
- 4 files changed, 2248 insertions(+)
+ .github/workflows/newman-ci.yml               |  133 ++
+ HW06/New Collection.postman_collection.json   | 1916 +++++++++++++++++
+ HW06/New Environment.postman_environment.json |  130 ++
+ HW06/data.csv                                 |  125 ++
+ 4 files changed, 2304 insertions(+)
  create mode 100644 .github/workflows/newman-ci.yml
- create mode 100644 New_Collection_postman_collection.json
- create mode 100644 New_Environment_postman_environment.json
- create mode 100644 data.csv
+ create mode 100644 HW06/New Collection.postman_collection.json
+ create mode 100644 HW06/New Environment.postman_environment.json
+ create mode 100644 HW06/data.csv
 
 diff --git a/.github/workflows/newman-ci.yml b/.github/workflows/newman-ci.yml
 new file mode 100644
-index 0000000..049b372
+index 0000000..c8eae53
 --- /dev/null
 +++ b/.github/workflows/newman-ci.yml
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,133 @@
 +name: API Automated Tests (Newman)
 +
 +on:
@@ -38,22 +46,51 @@ index 0000000..049b372
 +  pull_request:
 +    branches: [main, develop]
 +
++permissions:
++  contents: read
++  checks: write        # cần cho bước "Publish test summary" (mikepenz/action-junit-report)
++  pull-requests: write # để action đó có thể comment summary lên PR
++
 +jobs:
 +  newman-tests:
 +    runs-on: ubuntu-latest
 +
-+    # Nếu API server được đóng gói thành Docker image riêng, dùng "services" để
-+    # GitHub Actions tự khởi động container API song song với job test.
-+    # Xoá khối "services" này nếu bạn start server bằng "npm run start" ở step riêng bên dưới.
-+    services:
-+      eshop-api:
-+        image: <dockerhub-username>/eshop-api:latest   # <-- thay bằng image thật của bạn
-+        ports:
-+          - 3000:3000
++    # ĐANG DÙNG: API start trực tiếp từ source code trong repo (step "Install & start API server" bên dưới).
++    #
++    # Nếu về sau bạn đóng gói API thành Docker image thật (vd. đẩy lên Docker Hub/GHCR),
++    # có thể chuyển sang cách dùng "services" bằng cách:
++    #   1. Mở comment khối "services:" bên dưới và điền ĐÚNG tên image thật (không có dấu < >),
++    #      ví dụ: image: geedie/eshop-api:latest
++    #   2. Xoá/comment lại step "Install & start API server" ở dưới vì không cần nữa.
++    #
++    # services:
++    #   eshop-api:
++    #     image: geedie/eshop-api:latest
++    #     ports:
++    #       - 3000:3000
 +
 +    steps:
-+      - name: Checkout repository
++      - name: Checkout repository (kèm submodule eshop-sut)
 +        uses: actions/checkout@v4
++        with:
++          # QUAN TRỌNG: nếu không có dòng dưới, thư mục eshop-sut/ sẽ RỖNG trên runner
++          # (dù trên máy bạn eshop-sut/ đã có sẵn code sẵn nên không thấy vấn đề) -> npm ci ở bước sau sẽ fail ngay
++          submodules: recursive
++          # Chỉ cần dòng dưới nếu eshop-sut là repo PRIVATE (GITHUB_TOKEN mặc định không
++          # có quyền clone repo private khác). Nếu eshop-sut là repo PUBLIC, xoá dòng
++          # "token:" này đi, GITHUB_TOKEN mặc định là đủ.
++          # token: ${{ secrets.SUBMODULE_TOKEN }}
++
++      - name: Debug — kiểm tra submodule đã checkout đúng chưa
++        run: |
++          echo "--- Nội dung .gitmodules ---"
++          cat .gitmodules || echo "(KHÔNG tìm thấy file .gitmodules ở repo root)"
++          echo ""
++          echo "--- Danh sách thư mục ở repo root ---"
++          ls -la
++          echo ""
++          echo "--- git submodule status ---"
++          git submodule status || echo "(lệnh git submodule status lỗi)"
 +
 +      - name: Set up Node.js
 +        uses: actions/setup-node@v4
@@ -63,22 +100,46 @@ index 0000000..049b372
 +      - name: Install Newman + reporter HTML
 +        run: npm install -g newman newman-reporter-htmlextra
 +
-+      # Bỏ comment khối này nếu API nằm NGAY TRONG repo này (không dùng Docker service ở trên):
-+      # - name: Install & start API server
-+      #   run: |
-+      #     npm ci
-+      #     npm run start &
-+      #     npx wait-on http://localhost:3000/api/categories --timeout 30000
-+
-+      - name: Wait for API to be ready
-+        run: npx wait-on http://localhost:3000/api/categories --timeout 30000
++      - name: Install & start API server
++        # eshop-sut là submodule (mono-repo có 3 frontend + 1 backend).
++        # Server thật (Express + sqlite3 + jsonwebtoken) nằm ở eshop-sut/backend,
++        # KHÔNG phải ở root của eshop-sut -> working-directory phải trỏ đúng vào đây.
++        # Dùng "npm install" thay vì "npm ci" vì backend chưa có package-lock.json
++        # committed sẵn ("npm ci" bắt buộc phải có file lock, "npm install" thì không).
++        # Nếu sau này bạn thêm package-lock.json vào eshop-sut/backend, có thể đổi lại
++        # thành "npm ci" để cài đặt nhanh & tái lập chính xác hơn.
++        working-directory: eshop-sut/backend
++        run: |
++          npm install
++          npm run start &
++          npx wait-on http://localhost:3000/api/categories --timeout 30000
 +
 +      - name: Run Newman test suite
++        # Collection/Environment/data.csv nằm trong thư mục con "HW06/" của repo
++        # (git ls-files xác nhận path là "HW06/New Collection.postman_collection.json"),
++        # KHÔNG phải ở repo root -> dùng working-directory để trỏ đúng vào đó.
++        # Tên file có dấu cách -> PHẢI bọc trong dấu ngoặc kép, nếu không bash sẽ
++        # hiểu nhầm "New" và "Collection.postman_collection.json" là 2 tham số khác nhau.
++        working-directory: HW06
 +        run: |
 +          mkdir -p newman
-+          newman run New_Collection_postman_collection.json \
-+            -e New_Environment_postman_environment.json \
++          # Newman KHÔNG tự suy ra số iteration từ số dòng CSV — mặc định luôn là 1.
++          # Phải tự đếm số dòng dữ liệu (trừ header) rồi truyền vào --iteration-count,
++          # nếu không chỉ dòng đầu tiên của data.csv được chạy.
++          #
++          # FIX: dùng `wc -l` để đếm số dòng sẽ bị lệch (undercount 1 dòng) nếu file
++          # data.csv không kết thúc bằng ký tự newline ở dòng cuối — lỗi rất dễ mắc khi
++          # export CSV từ Excel/Google Sheets, và sẽ khiến TEST CASE CUỐI CÙNG bị âm
++          # thầm bỏ qua mà không có cảnh báo gì. Dùng `awk 'END{print NR}'` thay thế vì
++          # nó đếm đúng số dòng kể cả khi thiếu newline cuối file.
++          TOTAL_LINES=$(awk 'END{print NR}' data.csv)
++          ITER_COUNT=$((TOTAL_LINES - 1))
++          echo "Tổng số dòng trong data.csv (kể cả header, đếm an toàn với awk): $TOTAL_LINES"
++          echo "Số iteration sẽ chạy (số dòng data, không tính header): $ITER_COUNT"
++          newman run "New Collection.postman_collection.json" \
++            -e "New Environment.postman_environment.json" \
 +            -d data.csv \
++            --iteration-count "$ITER_COUNT" \
 +            --reporters cli,junit,htmlextra \
 +            --reporter-junit-export newman/report.xml \
 +            --reporter-htmlextra-export newman/report.html
@@ -92,26 +153,29 @@ index 0000000..049b372
 +        uses: actions/upload-artifact@v4
 +        with:
 +          name: newman-html-report
-+          path: newman/report.html
++          path: HW06/newman/report.html
 +
 +      - name: Upload JUnit report (để hiển thị test summary trên PR)
 +        if: always()
 +        uses: actions/upload-artifact@v4
 +        with:
 +          name: newman-junit-report
-+          path: newman/report.xml
++          path: HW06/newman/report.xml
 +
 +      - name: Publish test summary lên PR/commit
 +        if: always()
++        continue-on-error: true   # nếu action này lỗi (thiếu quyền, chạy từ fork PR...),
++                                   # KHÔNG được kéo cả job thành FAILED — Newman ở step
++                                   # trên mới là nơi duy nhất quyết định pass/fail thật
 +        uses: mikepenz/action-junit-report@v4
 +        with:
-+          report_paths: 'newman/report.xml'
-+          fail_on_failure: false   # để step trước (newman run) là nơi quyết định pass/fail, step này chỉ hiển thị summary
-diff --git a/New_Collection_postman_collection.json b/New_Collection_postman_collection.json
++          report_paths: 'HW06/newman/report.xml'
++          fail_on_failure: false
+diff --git a/HW06/New Collection.postman_collection.json b/HW06/New Collection.postman_collection.json
 new file mode 100644
-index 0000000..763927a
+index 0000000..7071d44
 --- /dev/null
-+++ b/New_Collection_postman_collection.json
++++ b/HW06/New Collection.postman_collection.json	
 @@ -0,0 +1,1916 @@
 +{
 +	"info": {
@@ -2030,11 +2094,11 @@ index 0000000..763927a
 +	]
 +}
 \ No newline at end of file
-diff --git a/New_Environment_postman_environment.json b/New_Environment_postman_environment.json
+diff --git a/HW06/New Environment.postman_environment.json b/HW06/New Environment.postman_environment.json
 new file mode 100644
-index 0000000..1634f70
+index 0000000..36be848
 --- /dev/null
-+++ b/New_Environment_postman_environment.json
++++ b/HW06/New Environment.postman_environment.json	
 @@ -0,0 +1,130 @@
 +{
 +  "id": "3163c84c-d7c4-4eaf-8158-c5d91361e028",
@@ -2167,11 +2231,11 @@ index 0000000..1634f70
 +  "_postman_exported_using": "Postman/12.24.4"
 +}
 \ No newline at end of file
-diff --git a/data.csv b/data.csv
+diff --git a/HW06/data.csv b/HW06/data.csv
 new file mode 100644
-index 0000000..6eb4e30
+index 0000000..dc3a933
 --- /dev/null
-+++ b/data.csv
++++ b/HW06/data.csv
 @@ -0,0 +1,125 @@
 +test_id,request_name,feature,description,expected_status,expect_array,expect_empty,expect_count,expect_field,expect_field_type,search,id,categoryName,expected_owner_user_id,expected_role
 +TC-FR05-01,GET /api/products,FR05,Get full product list without Authorization,200,true,false,5,,,,,,,
@@ -2302,7 +2366,7 @@ index 0000000..6eb4e30
 2.43.0
 
 
-From 5c4732f6f184af09404e733fb28b509009d9498b Mon Sep 17 00:00:00 2001
+From 4a0b12b9f843d88970d2f0e51e2a16c14d8ae2e4 Mon Sep 17 00:00:00 2001
 From: Geedie QA <qa@eshop.local>
 Date: Fri, 21 Aug 2026 10:08:31 +0000
 Subject: [PATCH 2/2] =?UTF-8?q?test:=20[DEMO]=20m=C3=B4=20ph=E1=BB=8Fng=20?=
@@ -2322,18 +2386,19 @@ khi status thật (200) không khớp expectedStatus (201):
     phát sinh thêm fail nào khác, dễ demo/soi log.
 
 Newman sẽ thoát exit code != 0 -> job 'newman-tests' trên GitHub Actions
-chuyển sang FAILED (X đỏ), other 123 test case còn lại vẫn pass bình thường.
+chuyển sang FAILED (X đỏ), 123 test case còn lại vẫn pass bình thường
+(iteration count đã fix ở commit trước nên chạy đủ 124/124 iteration).
 
 --> Dùng commit này để demo pipeline đỏ, sau đó revert lại commit trước
     (git revert HEAD) để đưa pipeline về xanh.
 ---
- data.csv | 2 +-
+ HW06/data.csv | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/data.csv b/data.csv
-index 6eb4e30..590b0dd 100644
---- a/data.csv
-+++ b/data.csv
+diff --git a/HW06/data.csv b/HW06/data.csv
+index dc3a933..05bb2d7 100644
+--- a/HW06/data.csv
++++ b/HW06/data.csv
 @@ -52,7 +52,7 @@ TC-FR08-15,POST /api/cart,FR08,Negative quantity is accepted; critical validatio
  TC-FR08-16,POST /api/cart,FR08,Extremely large quantity is accepted without limit,200,,,,,,,,,,
  TC-FR08-17,POST /api/cart,FR08,Nonexistent product id is accepted; critical validation defect,200,,,,id,number,,999999,,,

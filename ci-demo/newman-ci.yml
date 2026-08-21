@@ -36,6 +36,21 @@ jobs:
           # QUAN TRỌNG: nếu không có dòng dưới, thư mục eshop-sut/ sẽ RỖNG trên runner
           # (dù trên máy bạn eshop-sut/ đã có sẵn code sẵn nên không thấy vấn đề) -> npm ci ở bước sau sẽ fail ngay
           submodules: recursive
+          # Chỉ cần dòng dưới nếu eshop-sut là repo PRIVATE (GITHUB_TOKEN mặc định không
+          # có quyền clone repo private khác). Nếu eshop-sut là repo PUBLIC, xoá dòng
+          # "token:" này đi, GITHUB_TOKEN mặc định là đủ.
+          # token: ${{ secrets.SUBMODULE_TOKEN }}
+
+      - name: Debug — kiểm tra submodule đã checkout đúng chưa
+        run: |
+          echo "--- Nội dung .gitmodules ---"
+          cat .gitmodules || echo "(KHÔNG tìm thấy file .gitmodules ở repo root)"
+          echo ""
+          echo "--- Danh sách thư mục ở repo root ---"
+          ls -la
+          echo ""
+          echo "--- git submodule status ---"
+          git submodule status || echo "(lệnh git submodule status lỗi)"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -46,20 +61,37 @@ jobs:
         run: npm install -g newman newman-reporter-htmlextra
 
       - name: Install & start API server
-        # eshop-sut là submodule chứa source code server thật.
-        # Nếu package.json của server nằm ở vị trí khác, đổi lại working-directory cho đúng.
-        working-directory: eshop-sut
+        # eshop-sut là submodule (mono-repo có 3 frontend + 1 backend).
+        # Server thật (Express + sqlite3 + jsonwebtoken) nằm ở eshop-sut/backend,
+        # KHÔNG phải ở root của eshop-sut -> working-directory phải trỏ đúng vào đây.
+        # Dùng "npm install" thay vì "npm ci" vì backend chưa có package-lock.json
+        # committed sẵn ("npm ci" bắt buộc phải có file lock, "npm install" thì không).
+        # Nếu sau này bạn thêm package-lock.json vào eshop-sut/backend, có thể đổi lại
+        # thành "npm ci" để cài đặt nhanh & tái lập chính xác hơn.
+        working-directory: eshop-sut/backend
         run: |
-          npm ci
+          npm install
           npm run start &
           npx wait-on http://localhost:3000/api/categories --timeout 30000
 
       - name: Run Newman test suite
+        # Collection/Environment/data.csv nằm trong thư mục con "HW06/" của repo
+        # (git ls-files xác nhận path là "HW06/New Collection.postman_collection.json"),
+        # KHÔNG phải ở repo root -> dùng working-directory để trỏ đúng vào đó.
+        # Tên file có dấu cách -> PHẢI bọc trong dấu ngoặc kép, nếu không bash sẽ
+        # hiểu nhầm "New" và "Collection.postman_collection.json" là 2 tham số khác nhau.
+        working-directory: HW06
         run: |
           mkdir -p newman
-          newman run New_Collection_postman_collection.json \
-            -e New_Environment_postman_environment.json \
+          # Newman KHÔNG tự suy ra số iteration từ số dòng CSV — mặc định luôn là 1.
+          # Phải tự đếm số dòng dữ liệu (trừ header) rồi truyền vào --iteration-count,
+          # nếu không chỉ dòng đầu tiên của data.csv được chạy.
+          ITER_COUNT=$(($(wc -l < data.csv) - 1))
+          echo "Số iteration sẽ chạy (số dòng data, không tính header): $ITER_COUNT"
+          newman run "New Collection.postman_collection.json" \
+            -e "New Environment.postman_environment.json" \
             -d data.csv \
+            --iteration-count "$ITER_COUNT" \
             --reporters cli,junit,htmlextra \
             --reporter-junit-export newman/report.xml \
             --reporter-htmlextra-export newman/report.html
@@ -73,14 +105,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: newman-html-report
-          path: newman/report.html
+          path: HW06/newman/report.html
 
       - name: Upload JUnit report (để hiển thị test summary trên PR)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: newman-junit-report
-          path: newman/report.xml
+          path: HW06/newman/report.xml
 
       - name: Publish test summary lên PR/commit
         if: always()
@@ -89,5 +121,5 @@ jobs:
                                    # trên mới là nơi duy nhất quyết định pass/fail thật
         uses: mikepenz/action-junit-report@v4
         with:
-          report_paths: 'newman/report.xml'
+          report_paths: 'HW06/newman/report.xml'
           fail_on_failure: false
