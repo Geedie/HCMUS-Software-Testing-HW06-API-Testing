@@ -36,6 +36,21 @@ jobs:
           # QUAN TRỌNG: nếu không có dòng dưới, thư mục eshop-sut/ sẽ RỖNG trên runner
           # (dù trên máy bạn eshop-sut/ đã có sẵn code sẵn nên không thấy vấn đề) -> npm ci ở bước sau sẽ fail ngay
           submodules: recursive
+          # Chỉ cần dòng dưới nếu eshop-sut là repo PRIVATE (GITHUB_TOKEN mặc định không
+          # có quyền clone repo private khác). Nếu eshop-sut là repo PUBLIC, xoá dòng
+          # "token:" này đi, GITHUB_TOKEN mặc định là đủ.
+          # token: ${{ secrets.SUBMODULE_TOKEN }}
+
+      - name: Debug — kiểm tra submodule đã checkout đúng chưa
+        run: |
+          echo "--- Nội dung .gitmodules ---"
+          cat .gitmodules || echo "(KHÔNG tìm thấy file .gitmodules ở repo root)"
+          echo ""
+          echo "--- Danh sách thư mục ở repo root ---"
+          ls -la
+          echo ""
+          echo "--- git submodule status ---"
+          git submodule status || echo "(lệnh git submodule status lỗi)"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -48,9 +63,13 @@ jobs:
       - name: Install & start API server
         # eshop-sut là submodule chứa source code server thật.
         # Nếu package.json của server nằm ở vị trí khác, đổi lại working-directory cho đúng.
+        # Dùng "npm install" thay vì "npm ci" vì repo eshop-sut chưa có package-lock.json
+        # committed sẵn ("npm ci" bắt buộc phải có file lock, "npm install" thì không).
+        # Nếu sau này bạn thêm package-lock.json vào eshop-sut, có thể đổi lại thành "npm ci"
+        # để cài đặt nhanh & tái lập chính xác hơn.
         working-directory: eshop-sut
         run: |
-          npm ci
+          npm install
           npm run start &
           npx wait-on http://localhost:3000/api/categories --timeout 30000
 
