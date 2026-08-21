@@ -1,4 +1,4 @@
-﻿test_id,request_name,feature,description,expected_status,expect_array,expect_empty,expect_count,expect_field,expect_field_type,search,id,categoryName,expected_owner_user_id,expected_role
+test_id,request_name,feature,description,expected_status,expect_array,expect_empty,expect_count,expect_field,expect_field_type,search,id,categoryName,expected_owner_user_id,expected_role
 TC-FR05-01,GET /api/products,FR05,Get full product list without Authorization,200,true,false,5,,,,,,,
 TC-FR05-02,GET /api/products,FR05,Response body is a JSON array,200,true,,,,,,,,,
 TC-FR05-03,GET /api/products,FR05,Product count matches seed data,200,true,false,5,,,,,,,
@@ -52,7 +52,7 @@ TC-FR08-15,POST /api/cart,FR08,Negative quantity is accepted; critical validatio
 TC-FR08-16,POST /api/cart,FR08,Extremely large quantity is accepted without limit,200,,,,,,,,,,
 TC-FR08-17,POST /api/cart,FR08,Nonexistent product id is accepted; critical validation defect,200,,,,id,number,,999999,,,
 TC-FR08-18,POST /api/cart,FR08,Forged product price is accepted; critical integrity defect,200,,,,price,number,,1,,,
-TC-FR08-19,POST /api/checkout,FR08,Valid checkout creates an order and returns orderId,200,,,,message;orderId,message:string;orderId:number,,,,,
+TC-FR08-19,POST /api/checkout,FR08,Valid checkout creates an order and returns orderId,201,,,,message;orderId,message:string;orderId:number,,,,,
 TC-FR08-20,GET /api/orders/my-orders,FR08,New order starts with pending status,200,true,false,1,status,string,,,,,
 TC-FR08-21,GET /api/orders/my-orders,FR08,Order total_amount equals request value,200,true,,,total_amount,number,,,,,
 TC-FR08-22,GET /api/orders/my-orders,FR08,Order shipping_address equals request value,200,true,,,shipping_address,string,,,,,
