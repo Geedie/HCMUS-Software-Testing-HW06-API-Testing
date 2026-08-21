@@ -75,10 +75,12 @@ jobs:
           npx wait-on http://localhost:3000/api/categories --timeout 30000
 
       - name: Run Newman test suite
+        # Tên file có dấu cách -> PHẢI bọc trong dấu ngoặc kép, nếu không bash sẽ
+        # hiểu nhầm "New" và "Collection.postman_collection.json" là 2 tham số khác nhau.
         run: |
           mkdir -p newman
-          newman run New_Collection_postman_collection.json \
-            -e New_Environment_postman_environment.json \
+          newman run "New Collection.postman_collection.json" \
+            -e "New Environment.postman_environment.json" \
             -d data.csv \
             --reporters cli,junit,htmlextra \
             --reporter-junit-export newman/report.xml \
